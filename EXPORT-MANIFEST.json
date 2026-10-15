@@ -14,8 +14,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "9647311a579f7e0bf9740a7a28b5fa581f86595057af8f82b994936adf5d4241",
-      "size": 3821
+      "sha256": "6c15f64bfb86e0c5d0c1a2dc81cf9a03a23013e1fa55fe238f87a6f0bd06029f",
+      "size": 4711
     },
     {
       "path": "codex-rs/Cargo.lock",

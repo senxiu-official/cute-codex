@@ -1,3 +1,27 @@
+<!-- cute-codex: this section is added by the fork; the upstream Codex README follows below. -->
+
+# cute-codex
+
+cute-codex is a fork of [OpenAI Codex](https://github.com/openai/codex) used as the agent runtime
+of [cutex](https://github.com/senxiu-official/cutex) and
+[Cutex desktop](https://github.com/senxiu-official/cutex-desktop). It adds external input into
+running threads, presentations, selected auth files and a few fixes. Every modified or added file
+is listed in [CUTE-CODEX-CHANGES.md](CUTE-CODEX-CHANGES.md). It is not an official OpenAI release.
+
+- **Releases:** the [`release` branch](https://github.com/senxiu-official/cute-codex/tree/release)
+  has one commit per release on top of the upstream tag it is based on, tagged
+  `cute-codex-v<version>`. See [Releases](https://github.com/senxiu-official/cute-codex/releases).
+  The `main` branch is an unmodified mirror of upstream.
+- **Install:** you normally do not build this on its own. The cutex install guide
+  ([AGENT-INSTALL.md](https://github.com/senxiu-official/cutex-desktop/blob/release/docs/install/AGENT-INSTALL.md),
+  section 3) builds it from the `release` branch.
+- **License:** Apache-2.0, like upstream ([LICENSE](LICENSE), [NOTICE](NOTICE)).
+
+Built with Codex, Claude, DeepSeek, GLM and Kimi. Product names are trademarks of their owners;
+naming them implies no affiliation or endorsement.
+
+---
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -79,13 +103,3 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Open source fund**](./docs/open-source-fund.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-
-## cute-codex
-
-This is cute-codex, a fork of OpenAI Codex used by [cutex](https://github.com/senxiu-official/cutex)
-(external input into running threads, presentations, selected auth files and a few fixes). The
-modified and added files are listed in [CUTE-CODEX-CHANGES.md](CUTE-CODEX-CHANGES.md). It is not
-an official OpenAI release.
-
-Built with Codex, Claude, DeepSeek, GLM and Kimi. (Product names are trademarks of their
-owners; naming them implies no affiliation or endorsement.)

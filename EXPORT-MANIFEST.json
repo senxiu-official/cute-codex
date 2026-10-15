@@ -5,8 +5,18 @@
   "sourceCommit": null,
   "sourceCommitNote": "withheld: kept in the private export record next to the export directory",
   "license": "Apache-2.0",
-  "fileCount": 446,
+  "fileCount": 448,
   "files": [
+    {
+      "path": ".github/cute-codex/build-natives.sh",
+      "sha256": "154f9c7b4c8e86f0c2f3cb18d6f10fffea4f7c3a8274ef607514007b09ce405b",
+      "size": 8419
+    },
+    {
+      "path": ".github/workflows/cute-codex-build-binaries.yml",
+      "sha256": "fcf5a22ffb03a92df16f43d2fd44708ebb86c1502465d1ce6b6ecae279e4980f",
+      "size": 4073
+    },
     {
       "path": "CUTE-CODEX-CHANGES.md",
       "sha256": "7c9928e41bdc297b9bdcb0bbc1a4450b32b23d1e707c6a609d8306e1f4e20cc2",
@@ -14,8 +24,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "6c15f64bfb86e0c5d0c1a2dc81cf9a03a23013e1fa55fe238f87a6f0bd06029f",
-      "size": 4711
+      "sha256": "4d871ec9b7c04676a17b3f53db98723cca9c219a2472db153aa2e765c9e0c6cb",
+      "size": 5214
     },
     {
       "path": "codex-rs/Cargo.lock",

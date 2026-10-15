@@ -12,9 +12,15 @@ is listed in [CUTE-CODEX-CHANGES.md](CUTE-CODEX-CHANGES.md). It is not an offici
   has one commit per release on top of the upstream tag it is based on, tagged
   `cute-codex-v<version>`. See [Releases](https://github.com/senxiu-official/cute-codex/releases).
   The `main` branch is an unmodified mirror of upstream.
-- **Install:** you normally do not build this on its own. The cutex install guide
-  ([AGENT-INSTALL.md](https://github.com/senxiu-official/cutex-desktop/blob/release/docs/install/AGENT-INSTALL.md),
-  section 3) builds it from the `release` branch.
+- **Install:** you normally do not install this on its own. The cutex install guide
+  ([AGENT-INSTALL.md](https://github.com/senxiu-official/cutex-desktop/blob/release/docs/install/AGENT-INSTALL.md))
+  either unpacks the release binaries (section B) or builds it from the `release` branch (section 3).
+- **Release binaries:** each release carries `native-<version>-linux-x64.tar.gz` and
+  `-windows-x64.tar.gz` (`codex-app-server`, `codex`, `codex-code-mode-host` and the app-server
+  protocol schema), built by GitHub Actions (`.github/workflows/cute-codex-build-binaries.yml`) and
+  signed with minisign (`<file>.minisig`; public key
+  `RWRH9INhAb2gACJAg/h5EBjbudos2LXj6K+5hRBEGeVLDKaKzE+FICmS`). No macOS build: cutex agents do not
+  run on macOS.
 - **License:** Apache-2.0, like upstream ([LICENSE](LICENSE), [NOTICE](NOTICE)).
 
 Built with Codex, Claude, DeepSeek, GLM and Kimi. Product names are trademarks of their owners;

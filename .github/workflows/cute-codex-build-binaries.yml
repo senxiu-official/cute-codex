@@ -1,0 +1,106 @@
+# cute-codex: build the native files cutex runs (codex-app-server, codex, codex-code-mode-host + the
+# app-server protocol schema) for Linux x64 and Windows x64 and keep them as workflow artifacts.
+# Nothing is published from here and no signing key is in CI: the owner downloads the artifacts
+# (`gh run download`), signs them offline with minisign and uploads them to the GitHub Release.
+# Separate from the upstream Codex workflows: it runs only for cute-codex-v* tags or by hand.
+name: cute-codex build binaries
+
+on:
+  push:
+    tags: ["cute-codex-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cute-codex-build-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: natives ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    # A local Windows build takes about an hour on a desktop machine; GitHub's 4-core runners are slower.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04: glibc 2.35, so the binaries also run on older distributions than the newest runner.
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            leak_policy: fail
+          - platform: windows-x64
+            runner: windows-2022
+            leak_policy: warn
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep LF line endings (the runtime embeds SQL migrations hashed byte for byte)
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
+      - name: Build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev libcap-dev liblzma-dev libbz2-dev libzstd-dev zlib1g-dev
+      - name: Rust toolchain (codex-rs/rust-toolchain.toml)
+        working-directory: codex-rs
+        run: rustup toolchain install && rustc --version
+      - name: Target dir on the system drive (Windows; the workspace drive is smaller)
+        if: runner.os == 'Windows'
+        run: echo "CARGO_TARGET_DIR=C:\\cute-codex-target" >> "$GITHUB_ENV"
+      - name: Build and pack
+        env:
+          LEAK_POLICY: ${{ matrix.leak_policy }}
+          V8_DIR: ${{ runner.temp }}/v8
+        run: bash .github/cute-codex/build-natives.sh "${{ matrix.platform }}" "$RUNNER_TEMP/out"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: natives-${{ matrix.platform }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 30
+
+  sums:
+    name: SHA256SUMS
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+          pattern: natives-*
+      - name: Check and combine the per-platform sums
+        run: |
+          set -euo pipefail
+          mkdir out
+          for d in artifacts/natives-*; do
+            (cd "$d" && sha256sum --check SHA256SUMS-*)
+            cat "$d"/SHA256SUMS-* >> out/SHA256SUMS
+          done
+          sort -k2 -o out/SHA256SUMS out/SHA256SUMS
+          cat out/SHA256SUMS
+          {
+            echo '### cute-codex natives'
+            echo '```'
+            cat out/SHA256SUMS
+            echo '```'
+            echo 'Unsigned: the owner signs these offline (minisign) before they are attached to a release.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: SHA256SUMS
+          path: out/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

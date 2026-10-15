@@ -14,8 +14,8 @@
     },
     {
       "path": ".github/workflows/cute-codex-build-binaries.yml",
-      "sha256": "fcf5a22ffb03a92df16f43d2fd44708ebb86c1502465d1ce6b6ecae279e4980f",
-      "size": 4073
+      "sha256": "e7beeace69ff353fbe74c9edf14be82b9ffc49d5fd4906ad03f4306a97c1e9ca",
+      "size": 4643
     },
     {
       "path": "CUTE-CODEX-CHANGES.md",

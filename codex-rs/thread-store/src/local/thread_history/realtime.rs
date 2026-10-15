@@ -17,17 +17,20 @@ use crate::TimelinePage;
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TimelineCursor {
-    thread_id: ThreadId,
-    position: u64,
-    kind: u8,
-    id: String,
+pub(super) struct TimelineCursor {
+    pub(super) thread_id: ThreadId,
+    pub(super) position: u64,
+    pub(super) kind: u8,
+    pub(super) id: String,
 }
 
 // A rollout record can materialize both an item and a turn boundary. Keep the
 // boundary order stable, including when the page cuts through one ordinal.
 pub(super) fn entry_key(entry: &ThreadTimelineEntry) -> (u64, u8, &str) {
     match entry {
+        ThreadTimelineEntry::Presentation { position, item } => {
+            (*position, 4, &item.presentation.id)
+        }
         ThreadTimelineEntry::TurnStarted {
             position, turn_id, ..
         } => (*position, 0, turn_id),
@@ -43,6 +46,19 @@ pub(in crate::local) async fn list_timeline(
     store: &LocalThreadStore,
     params: ListTimelineParams,
 ) -> ThreadStoreResult<TimelinePage> {
+    validate_page_size(params.page_size)?;
+    if let Some(db) = store.state_db().await
+        && let Some(metadata) = db
+            .get_thread(params.thread_id)
+            .await
+            .map_err(thread_history_error)?
+        && metadata.history_mode == codex_protocol::protocol::ThreadHistoryMode::Legacy
+    {
+        if metadata.archived_at.is_some() {
+            return Err(thread_history_error("thread is archived"));
+        }
+        return super::legacy_timeline::list(store, params).await;
+    }
     validate_thread_for_paginated_reads(
         store,
         params.thread_id,
@@ -53,6 +69,7 @@ pub(in crate::local) async fn list_timeline(
     validate_page_size(params.page_size)?;
 
     let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+    super::super::presentation_history::validate(store, params.thread_id, &lineage).await?;
     let pool = store.thread_history_db().await?;
     let cursor = params
         .cursor
@@ -77,7 +94,7 @@ pub(in crate::local) async fn list_timeline(
         .map(|position| sqlite_integer(position, "rollout ordinal"))
         .transpose()?
         .unwrap_or(i64::MAX);
-    let cursor_kind = cursor.as_ref().map_or(4, |cursor| cursor.kind);
+    let cursor_kind = cursor.as_ref().map_or(5, |cursor| cursor.kind);
     let cursor_id = cursor.as_ref().map_or("", |cursor| cursor.id.as_str());
 
     let mut rows = Vec::new();
@@ -120,6 +137,13 @@ WHERE thread_id = ?1 AND rollout_ordinal >= ?2
   AND rollout_ordinal < ?3 AND rollout_ordinal <= ?4
   AND (rollout_ordinal, 2, item_id) < (?4, ?5, ?6)
 ORDER BY rollout_ordinal DESC, item_id DESC LIMIT ?7
+), presentations AS (
+SELECT rollout_ordinal, 4 AS kind, item_id AS id, NULL AS turn_id, item_json
+FROM thread_presentations
+WHERE thread_id = ?1 AND rollout_ordinal >= ?2
+  AND rollout_ordinal < ?3 AND rollout_ordinal <= ?4
+  AND (rollout_ordinal, 4, item_id) < (?4, ?5, ?6)
+ORDER BY rollout_ordinal DESC, item_id DESC LIMIT ?7
 ), ends AS (
 SELECT rollout_end_ordinal AS rollout_ordinal, 3 AS kind, turn_id AS id, turn_id,
        json_object('type', 'turnCompleted', 'position', rollout_end_ordinal,
@@ -136,6 +160,7 @@ SELECT * FROM starts
 UNION ALL SELECT * FROM items
 UNION ALL SELECT * FROM realtime
 UNION ALL SELECT * FROM ends
+UNION ALL SELECT * FROM presentations
 ORDER BY rollout_ordinal DESC, kind DESC, id DESC
 LIMIT ?7
             "#,
@@ -163,6 +188,10 @@ LIMIT ?7
                         serde_json::from_str::<ThreadItem>(&item_json)
                             .map_err(thread_history_error)?,
                     ),
+                },
+                4 => ThreadTimelineEntry::Presentation {
+                    position,
+                    item: serde_json::from_str(&item_json).map_err(thread_history_error)?,
                 },
                 2 => ThreadTimelineEntry::Realtime {
                     position,

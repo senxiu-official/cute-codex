@@ -1,0 +1,31 @@
+---
+source: tui/src/history_cell/cutex_mcp_display_tests.rs
+assertion_line: 357
+expression: "headers.join(\"\\n\")"
+---
+• Creating task revision · t
+• Created task revision · t
+• Assigning task · assignment
+• Assigned task · assignment
+• Creating and assigning task · assignment
+• Created and assigned task · assignment
+• Querying tasks
+• Queried tasks
+• Accepting task result · assignment
+• Accepted task result · assignment
+• Requesting task changes · assignment
+• Requested task changes · assignment
+• Rejecting task result · assignment
+• Rejected task result · assignment
+• Cancelling task · assignment
+• Cancelled task · assignment
+• Accepting task result · assignment
+• Accepted task result · assignment
+• Requesting task changes · assignment
+• Requested task changes · assignment
+• Rejecting task result · assignment
+• Rejected task result · assignment
+• Listed agents · 0 visible
+• Queried managed agents
+• Job cancellation returned · job-1
+• Read job output · job-1

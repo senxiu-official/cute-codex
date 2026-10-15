@@ -340,6 +340,18 @@ impl CodexThread {
             .await;
     }
 
+    /// Materialize the live writer and publish pending metadata before reading history.
+    /// Success is a writer barrier, not an fsync or a model-context acknowledgement.
+    pub async fn persist(&self) -> ThreadStoreResult<()> {
+        let live_thread = self
+            .session
+            .live_thread()
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: "Session persistence is disabled".to_string(),
+            })?;
+        live_thread.persist_for_read().await
+    }
+
     #[doc(hidden)]
     pub async fn flush_rollout(&self) -> std::io::Result<()> {
         self.session.flush_rollout().await
@@ -728,6 +740,15 @@ impl CodexThread {
     /// `thread/tokenUsage/updated` payload incomplete.
     pub async fn token_usage_info(&self) -> Option<TokenUsageInfo> {
         self.session.token_usage_info().await
+    }
+
+    /// Returns the authoritative auto-compact window count for presentation clients.
+    ///
+    /// Resume reconstruction either restores a persisted window number or falls back to
+    /// reconstructing it from compacted history, so this value remains useful when a client
+    /// attaches to an existing thread.
+    pub async fn auto_compact_window_number(&self) -> u64 {
+        self.session.auto_compact_window_number().await
     }
 
     /// Records a context fragment without creating a new user turn boundary.

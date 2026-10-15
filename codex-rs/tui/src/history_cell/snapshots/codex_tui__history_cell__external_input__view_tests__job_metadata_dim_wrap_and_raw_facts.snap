@@ -1,0 +1,19 @@
+---
+source: tui/src/history_cell/external_input_view_tests.rs
+assertion_line: 124
+expression: "snapshots.join(\"\\n---\\n\")"
+---
+• Job completed · job_example
+  exit 0 · run 1.048 s · stdout 19 B · stderr 0 B
+---
+• Job completed ·
+  job_example
+  exit 0 · run 1.048 s ·
+  stdout 19 B · stderr 0 B
+---
+• Job exited · job_example
+  stdout 19 B / 100 B · truncated · stderr 0 B
+---
+• Job exited · job_example
+  stdout 19 B / 100 B ·
+  truncated · stderr 0 B

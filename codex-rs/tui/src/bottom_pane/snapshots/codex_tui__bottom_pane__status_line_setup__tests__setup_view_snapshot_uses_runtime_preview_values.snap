@@ -13,9 +13,9 @@ expression: "render_lines(&view, 72)"
   [x] model                 Current model name                          
   [x] current-dir           Current working directory                   
   [x] git-branch            Current Git branch (omitted when unavailabl…
-  [ ] model-with-reasoning  Current model name with reasoning level     
-  [ ] reasoning             Current reasoning level                     
-  [ ] project-name          Project name (omitted when unavailable)     
+  [ ] C+ Notification       Cutex notification priority (Alt+N to cycle)
+  [ ] C+ Working Directory  Working directory with configurable display…
+  [ ] C+ Agent Name         Agent name and assigned project badge       
 ↓                                                                       
   gpt-5-codex · ~/codex-rs · jif/statusline-preview                     
   space toggle · ←/→ reorder · enter save · esc cancel

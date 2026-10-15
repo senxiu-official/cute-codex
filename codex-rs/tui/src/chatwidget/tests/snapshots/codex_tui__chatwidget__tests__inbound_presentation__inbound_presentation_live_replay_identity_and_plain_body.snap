@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/inbound_presentation_tests.rs
+assertion_line: 17
+expression: display
+---
+• External input · agent/
+  worker · message
+  First line.
+  第二行 with control.

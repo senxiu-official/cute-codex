@@ -1,14 +1,13 @@
-//! Covers sparkle dismissal across ordinary and prepared-image user submissions.
+//! Covers sparkle persistence across ordinary and prepared-image submissions.
 
 use super::*;
 use crate::terminal_palette::with_test_default_colors;
 use crate::terminal_probe::DefaultColors;
 use codex_app_server_protocol::ImageReference;
 use pretty_assertions::assert_eq;
-use pretty_assertions::assert_ne;
 
 #[tokio::test]
-async fn ordinary_and_prepared_image_submissions_consume_the_sparkle_before_rendering() {
+async fn submissions_do_not_end_the_sparkle() {
     let image = UserInput::Image {
         image: ImageReference::Inline {
             url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lFkAAAAASUVORK5CYII=".into(),
@@ -36,9 +35,7 @@ async fn ordinary_and_prepared_image_submissions_consume_the_sparkle_before_rend
         chat.local_settings.tui.animations = true;
         chat.local_settings.tui.effects.starfield = true;
         chat.bottom_pane
-            .mark_fresh_task_for_sparkle("gpt-6-astra", &chat.local_settings.tui);
-        let untouched = chat.bottom_pane.composer_draft_snapshot().sparkle_draft;
-        assert_eq!(untouched, Default::default());
+            .sync_model_sparkle("gpt-6-astra", &chat.local_settings.tui);
         assert!(visible(&chat));
 
         let mut expected_items = prepared_images.clone().unwrap_or_default();
@@ -64,11 +61,7 @@ async fn ordinary_and_prepared_image_submissions_consume_the_sparkle_before_rend
         };
 
         assert!(accepted);
-        assert_ne!(
-            chat.bottom_pane.composer_draft_snapshot().sparkle_draft,
-            untouched
-        );
-        assert!(!visible(&chat));
+        assert!(visible(&chat));
         let Op::UserTurn { items, .. } = next_submit_op(&mut ops) else {
             unreachable!("next_submit_op only returns UserTurn")
         };

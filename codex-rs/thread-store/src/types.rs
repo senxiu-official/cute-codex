@@ -231,6 +231,10 @@ pub struct PreparedFork {
     pub history_base: Option<HistoryPosition>,
     /// Bounded model context selected by the requested fork boundary.
     pub model_context: Arc<Vec<RolloutItem>>,
+    /// Complete rollout file of the source thread's own segment, when the backend has one.
+    /// `model_context` starts at the newest compaction, so history-wide checks (ExternalInput
+    /// recovery) must read this file instead.
+    pub source_rollout_path: Option<PathBuf>,
     /// Blocks source deletion until the child's history reference is durable.
     _source_reservation: Box<dyn std::fmt::Debug + Send>,
 }
@@ -247,8 +251,15 @@ impl PreparedFork {
             source_thread_id,
             history_base,
             model_context,
+            source_rollout_path: None,
             _source_reservation: Box::new(source_reservation),
         }
+    }
+
+    /// Names the source segment's complete rollout file (see `source_rollout_path`).
+    pub fn with_source_rollout_path(mut self, path: PathBuf) -> Self {
+        self.source_rollout_path = Some(path);
+        self
     }
 }
 

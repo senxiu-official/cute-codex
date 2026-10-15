@@ -136,7 +136,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.data);
+        // A response for a previous directory is not an empty current catalog.
+        let Some(skills) = skills_for_cwd(&self.config.cwd, &response.data) else {
+            return;
+        };
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
@@ -171,12 +174,14 @@ impl ChatWidget {
     }
 }
 
-fn skills_for_cwd(cwd: &AbsolutePathBuf, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
+fn skills_for_cwd(
+    cwd: &AbsolutePathBuf,
+    skills_entries: &[SkillsListEntry],
+) -> Option<Vec<SkillMetadata>> {
     skills_entries
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd.as_path())
         .map(|entry| entry.skills.clone())
-        .unwrap_or_default()
 }
 
 fn enabled_skills_for_mentions(skills: &[SkillMetadata]) -> Vec<SkillMetadata> {

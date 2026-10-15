@@ -89,7 +89,7 @@ impl GuardianApprovalReviewer {
             config
                 .config_layer_stack
                 .requirements()
-                .constrain_guardian_policy(&mut policy, &model.slug);
+                .constrain_guardian_policy_for_model_info(&mut policy, model);
         }
         let mode = policy.review_mode(input.category);
         if mode != GuardianReviewMode::Adaptive {

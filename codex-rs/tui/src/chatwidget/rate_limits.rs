@@ -17,6 +17,8 @@ pub(super) const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
 pub(super) const RATE_LIMIT_SWITCH_PROMPT_VIEW_ID: &str = "rate-limit-switch-prompt";
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 4] = [50.0, 75.0, 90.0, 95.0];
+const CLAUDE_USAGE_REFRESH_ENV_VAR: &str = "CUTEX_CLAUDE_USAGE_REFRESH_SECONDS";
+const DEFAULT_CLAUDE_USAGE_REFRESH_SECS: u64 = 300;
 const PRIMARY_LIMIT_FALLBACK_LABEL: &str = "usage";
 const SECONDARY_LIMIT_FALLBACK_LABEL: &str = "secondary usage";
 
@@ -190,6 +192,13 @@ fn has_usable_workspace_credits(credits: &CreditsSnapshot) -> bool {
 impl ChatWidget {
     /// Poll more often near exhaustion for every ChatGPT account, independently of experiments.
     pub(crate) fn rate_limit_refresh_interval(&self) -> Option<std::time::Duration> {
+        if self.config.model_provider_id == "cute-claude" {
+            return Some(std::time::Duration::from_secs(
+                Self::claude_usage_refresh_secs(
+                    std::env::var(CLAUDE_USAGE_REFRESH_ENV_VAR).ok().as_deref(),
+                ),
+            ));
+        }
         if !self.should_prefetch_rate_limits() {
             return None;
         }
@@ -215,6 +224,13 @@ impl ChatWidget {
             60
         };
         Some(std::time::Duration::from_secs(seconds))
+    }
+
+    fn claude_usage_refresh_secs(value: Option<&str>) -> u64 {
+        value
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| (60..=3_600).contains(seconds))
+            .unwrap_or(DEFAULT_CLAUDE_USAGE_REFRESH_SECS)
     }
 
     pub(crate) fn hold_rate_limit_recovery(&mut self) -> bool {
@@ -648,5 +664,20 @@ impl ChatWidget {
         if hidden {
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_usage_refresh_uses_bounded_seconds_or_default() {
+        assert_eq!(ChatWidget::claude_usage_refresh_secs(None), 300);
+        assert_eq!(ChatWidget::claude_usage_refresh_secs(Some("60")), 60);
+        assert_eq!(ChatWidget::claude_usage_refresh_secs(Some("3600")), 3_600);
+        assert_eq!(ChatWidget::claude_usage_refresh_secs(Some("59")), 300);
+        assert_eq!(ChatWidget::claude_usage_refresh_secs(Some("3601")), 300);
+        assert_eq!(ChatWidget::claude_usage_refresh_secs(Some("invalid")), 300);
     }
 }

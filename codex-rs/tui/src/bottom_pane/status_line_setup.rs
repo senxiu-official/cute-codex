@@ -54,6 +54,23 @@ const STATUS_LINE_USE_THEME_COLORS_ITEM_ID: &str = "status-line-use-theme-colors
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum StatusLineItem {
+    /// Inert reviewed launch label, never account identity.
+    #[strum(to_string = "cutex_profile", serialize = "custom:profile")]
+    CustomProfile,
+    /// Inert reviewed static greeting.
+    #[strum(
+        to_string = "cutex_welcome",
+        serialize = "custom:bon-voyage",
+        serialize = "cutex_bon_voyage"
+    )]
+    CustomBonVoyage,
+    /// Per-session Cutex external notification priority.
+    #[strum(
+        to_string = "cutex_notification",
+        serialize = "notification",
+        serialize = "custom:notification"
+    )]
+    Notification,
     /// The current model name.
     #[strum(to_string = "model", serialize = "model-name")]
     ModelName,
@@ -66,6 +83,25 @@ pub(crate) enum StatusLineItem {
 
     /// Current working directory path.
     CurrentDir,
+    /// Working directory with display-only path aliases.
+    #[strum(to_string = "cutex_workdir")]
+    CutexWorkdir,
+    #[strum(to_string = "cutex_agent_name")]
+    CutexAgentName,
+    #[strum(to_string = "cutex_context_remaining")]
+    CutexContextRemaining,
+    #[strum(to_string = "cutex_fable_limit_bar")]
+    CutexFableLimitBar,
+    #[strum(to_string = "cutex_simple_five_hour_limit")]
+    CutexSimpleFiveHourLimit,
+    #[strum(to_string = "cutex_aligned_profile")]
+    CutexAlignedProfile,
+    #[strum(to_string = "cutex_fable_limit")]
+    CutexFableLimit,
+    #[strum(to_string = "cutex_customized_limit")]
+    CutexCustomizedLimit,
+    #[strum(to_string = "cutex_customized_limit_bar")]
+    CutexCustomizedLimitBar,
 
     /// Project root directory (if detected).
     #[strum(
@@ -112,9 +148,33 @@ pub(crate) enum StatusLineItem {
 
     /// Remaining usage on the secondary rate limit.
     WeeklyLimit,
+    #[strum(to_string = "cutex_five_hour_limit")]
+    CutexFiveHourLimit,
+    #[strum(to_string = "cutex_weekly_limit")]
+    CutexWeeklyLimit,
+    #[strum(to_string = "cutex_simple_weekly_limit")]
+    CutexSimpleWeeklyLimit,
+    #[strum(to_string = "cutex_newline")]
+    CutexNewline,
+    #[strum(to_string = "cutex_welcome_indentation")]
+    CutexWelcomeIndentation,
+    #[strum(to_string = "cutex_space_2")]
+    CutexSpace2,
+    #[strum(to_string = "cutex_space_4")]
+    CutexSpace4,
+    #[strum(to_string = "cutex_space_6")]
+    CutexSpace6,
+    #[strum(to_string = "cutex_space_8")]
+    CutexSpace8,
+    #[strum(to_string = "cutex_space_10")]
+    CutexSpace10,
 
     /// Codex application version.
     CodexVersion,
+
+    /// Cutex release version, shown only when newer than the local registry.
+    #[strum(to_string = "cutex_version")]
+    CutexVersion,
 
     /// Total context window size in tokens.
     ContextWindowSize,
@@ -161,10 +221,37 @@ impl StatusLineItem {
     /// User-visible description shown in the popup.
     pub(crate) fn description(self) -> &'static str {
         match self {
+            Self::CutexAgentName => "Agent name and assigned project badge",
+            Self::CutexContextRemaining => "Remaining context percentage",
+            Self::CutexFableLimitBar => "Fable-only quota and reset countdown with progress bar",
+            Self::CutexSimpleFiveHourLimit => "Time until reset and remaining 5h quota",
+            Self::CutexAlignedProfile => "Profile centered in the Welcome display width",
+            Self::CutexCustomizedLimit => "Profile endpoint remaining quota and reset countdown",
+            Self::CutexCustomizedLimitBar => "Profile endpoint remaining quota with progress bar",
+            Self::CutexFableLimit => "Fable-specific remaining weekly quota and reset countdown",
+            Self::CutexWelcomeIndentation => {
+                "Blank columns matching Welcome; animated greeting uses its reserved width"
+            }
+            Self::CutexSpace2
+            | Self::CutexSpace4
+            | Self::CutexSpace6
+            | Self::CutexSpace8
+            | Self::CutexSpace10 => "Fixed blank terminal columns; no separator dots",
+            Self::CutexNewline => "Start a second status line; no blank rows",
+            Self::CutexFiveHourLimit | Self::CutexWeeklyLimit => {
+                "Remaining quota and time until reset; quarter-cell progress bar"
+            }
+            Self::CutexSimpleWeeklyLimit => {
+                "Time until weekly reset and remaining quota; no progress bar"
+            }
+            Self::CustomProfile => "Reviewed launch display label (not account identity)",
+            Self::CustomBonVoyage => "Reviewed static greeting",
+            Self::Notification => "Cutex notification priority (Alt+N to cycle)",
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::Reasoning => "Current reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
+            StatusLineItem::CutexWorkdir => "Working directory with configurable display aliases",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::Hostname => "Current machine hostname (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
@@ -190,6 +277,9 @@ impl StatusLineItem {
                 "Remaining usage on the secondary usage limit (omitted when unavailable)"
             }
             StatusLineItem::CodexVersion => "Codex application version",
+            StatusLineItem::CutexVersion => {
+                "Cute-codex release (hidden when current; newer release shown when known)"
+            }
             StatusLineItem::ContextWindowSize => {
                 "Total context window size in tokens (omitted when unknown)"
             }
@@ -220,10 +310,35 @@ impl StatusLineItem {
 
     pub(crate) fn preview_item(self) -> StatusSurfacePreviewItem {
         match self {
+            Self::CutexWelcomeIndentation
+            | Self::CutexSpace2
+            | Self::CutexSpace4
+            | Self::CutexSpace6
+            | Self::CutexSpace8
+            | Self::CutexSpace10 => StatusSurfacePreviewItem::CutexSpacing,
+            Self::CutexNewline => StatusSurfacePreviewItem::CutexNewline,
+            Self::CustomProfile => StatusSurfacePreviewItem::CustomProfile,
+            Self::CustomBonVoyage => StatusSurfacePreviewItem::CustomBonVoyage,
+            Self::Notification => StatusSurfacePreviewItem::Notification,
             StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
             StatusLineItem::ModelWithReasoning => StatusSurfacePreviewItem::ModelWithReasoning,
             StatusLineItem::Reasoning => StatusSurfacePreviewItem::Reasoning,
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
+            StatusLineItem::CutexWorkdir => StatusSurfacePreviewItem::CutexWorkdir,
+            StatusLineItem::CutexAgentName => StatusSurfacePreviewItem::CutexAgentName,
+            StatusLineItem::CutexContextRemaining => {
+                StatusSurfacePreviewItem::CutexContextRemaining
+            }
+            StatusLineItem::CutexFableLimitBar => StatusSurfacePreviewItem::CutexFableLimitBar,
+            StatusLineItem::CutexSimpleFiveHourLimit => {
+                StatusSurfacePreviewItem::CutexSimpleFiveHourLimit
+            }
+            StatusLineItem::CutexAlignedProfile => StatusSurfacePreviewItem::CutexAlignedProfile,
+            StatusLineItem::CutexFableLimit => StatusSurfacePreviewItem::CutexFableLimit,
+            StatusLineItem::CutexCustomizedLimit => StatusSurfacePreviewItem::CutexCustomizedLimit,
+            StatusLineItem::CutexCustomizedLimitBar => {
+                StatusSurfacePreviewItem::CutexCustomizedLimitBar
+            }
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::Hostname => StatusSurfacePreviewItem::Hostname,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
@@ -236,7 +351,13 @@ impl StatusLineItem {
             StatusLineItem::ContextUsed => StatusSurfacePreviewItem::ContextUsed,
             StatusLineItem::FiveHourLimit => StatusSurfacePreviewItem::FiveHourLimit,
             StatusLineItem::WeeklyLimit => StatusSurfacePreviewItem::WeeklyLimit,
+            StatusLineItem::CutexFiveHourLimit => StatusSurfacePreviewItem::CutexFiveHourLimit,
+            StatusLineItem::CutexWeeklyLimit => StatusSurfacePreviewItem::CutexWeeklyLimit,
+            StatusLineItem::CutexSimpleWeeklyLimit => {
+                StatusSurfacePreviewItem::CutexSimpleWeeklyLimit
+            }
             StatusLineItem::CodexVersion => StatusSurfacePreviewItem::CodexVersion,
+            StatusLineItem::CutexVersion => StatusSurfacePreviewItem::CutexVersion,
             StatusLineItem::ContextWindowSize => StatusSurfacePreviewItem::ContextWindowSize,
             StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
             StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
@@ -313,9 +434,14 @@ impl StatusLineSetupView {
             }
         }
 
-        for item in StatusLineItem::iter() {
+        let mut remaining: Vec<_> = StatusLineItem::iter().collect();
+        remaining.sort_by_key(|item| !item.to_string().starts_with("cutex_"));
+        for item in remaining {
             let item_id = item.to_string();
-            if used_ids.contains(&item_id) {
+            if used_ids.contains(&item_id)
+                || (crate::custom_status_items::is_custom(item)
+                    && crate::custom_status_items::style(item).is_none())
+            {
                 continue;
             }
             items.push(Self::status_line_select_item(
@@ -334,13 +460,13 @@ impl StatusLineSetupView {
             .list_keymap(list_keymap)
             .items(items)
             .enable_ordering()
-            .on_preview(move |items| {
+            .on_preview_lines(move |items| {
                 let use_theme_colors = items
                     .iter()
                     .find(|item| item.id == STATUS_LINE_USE_THEME_COLORS_ITEM_ID)
                     .map(|item| item.enabled)
                     .unwrap_or(true);
-                preview_data.status_line_for_items(
+                preview_data.status_lines_for_items(
                     items
                         .iter()
                         .filter(|item| item.enabled)
@@ -377,6 +503,53 @@ impl StatusLineSetupView {
         let default_name = item.to_string();
         let default_description = item.description();
         let (name, description) = match item {
+            StatusLineItem::CutexCustomizedLimit => {
+                ("C+ Customized Limit".into(), default_description.into())
+            }
+            StatusLineItem::CutexCustomizedLimitBar => {
+                ("C+ Customized Limit Bar".into(), default_description.into())
+            }
+            StatusLineItem::CutexAgentName => ("C+ Agent Name".into(), default_description.into()),
+            StatusLineItem::CutexContextRemaining => {
+                ("C+ Context Remaining".into(), default_description.into())
+            }
+            StatusLineItem::CutexFableLimitBar => {
+                ("C+ Fable Limit Bar".into(), default_description.into())
+            }
+            StatusLineItem::CutexSimpleFiveHourLimit => {
+                ("C+ 5h Limit".into(), default_description.into())
+            }
+            StatusLineItem::CutexAlignedProfile => {
+                ("C+ Profile Aligned".into(), default_description.into())
+            }
+            StatusLineItem::CutexFableLimit => {
+                ("C+ Fable Limit".into(), default_description.into())
+            }
+            StatusLineItem::CutexWorkdir => {
+                ("C+ Working Directory".into(), default_description.into())
+            }
+            StatusLineItem::CutexVersion => ("C+ Cutex Version".into(), default_description.into()),
+            StatusLineItem::CutexFiveHourLimit => {
+                ("C+ 5h Limit Bar".into(), default_description.into())
+            }
+            StatusLineItem::CutexWeeklyLimit => {
+                ("C+ Weekly Limit Bar".into(), default_description.into())
+            }
+            StatusLineItem::CutexSimpleWeeklyLimit => {
+                ("C+ Weekly Limit".into(), default_description.into())
+            }
+            StatusLineItem::CutexWelcomeIndentation => {
+                ("C+ Welcome Indentation".into(), default_description.into())
+            }
+            StatusLineItem::CutexSpace2 => ("C+ 2 Spaces".into(), default_description.into()),
+            StatusLineItem::CutexSpace4 => ("C+ 4 Spaces".into(), default_description.into()),
+            StatusLineItem::CutexSpace6 => ("C+ 6 Spaces".into(), default_description.into()),
+            StatusLineItem::CutexSpace8 => ("C+ 8 Spaces".into(), default_description.into()),
+            StatusLineItem::CutexSpace10 => ("C+ 10 Spaces".into(), default_description.into()),
+            StatusLineItem::CutexNewline => ("C+ Newline".into(), default_description.into()),
+            StatusLineItem::CustomBonVoyage => ("C+ Welcome".into(), default_description.into()),
+            StatusLineItem::CustomProfile => ("C+ Profile".into(), default_description.into()),
+            StatusLineItem::Notification => ("C+ Notification".into(), default_description.into()),
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => (
                 preview_data.rate_limit_item_name(item.preview_item(), &default_name),
                 preview_data.rate_limit_item_description(item.preview_item(), default_description),

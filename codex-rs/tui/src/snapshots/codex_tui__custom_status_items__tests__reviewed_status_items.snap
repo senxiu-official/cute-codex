@@ -1,0 +1,6 @@
+---
+source: tui/src/custom_status_items_tests.rs
+expression: "format!(\"{}\\n{}\", draw(70), draw(24))"
+---
+Bon voyage ! · 继承 profile · model low
+Bon voyage ! · 继承 prof

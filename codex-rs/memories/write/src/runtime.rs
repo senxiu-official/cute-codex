@@ -340,7 +340,8 @@ impl MemoryStartupContext {
             config.http_client_factory(),
             config.workspace_routing_context(),
             Vec::new(),
-        );
+        )
+        .with_tool_schema_compat(config.tool_schema_compat);
 
         let mut client_session = model_client.new_session();
         let window_id = format!("{}:0", self.thread_id);

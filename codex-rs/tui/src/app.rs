@@ -260,6 +260,7 @@ mod side;
 mod startup;
 mod startup_prompts;
 mod startup_warnings;
+pub(crate) mod status_preferences;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;
@@ -736,9 +737,21 @@ impl RuntimePermissionProfileOverride {
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
-    let TypedRequestError::Server { source, .. } = error else {
+    let TypedRequestError::Server { method, source } = error else {
         return None;
     };
+    // A backend without steering rejected the input before accepting it. Use
+    // the existing local queue, just as for a non-steerable native turn.
+    if method == "turn/steer" && source.code == -32601 {
+        return Some(AppServerTurnError {
+            message:
+                "This backend cannot steer an active turn; queue the message until it finishes."
+                    .to_string(),
+            codex_error_info: None,
+            additional_details: None,
+            misalignment: None,
+        });
+    }
     let turn_error: AppServerTurnError = serde_json::from_value(source.data.clone()?).ok()?;
     matches!(
         turn_error.codex_error_info,
@@ -834,6 +847,11 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(&event, TuiEvent::Paste(_))
+            || matches!(&event, TuiEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat))
+        {
+            self.chat_widget.acknowledge_notification_interaction();
+        }
         tui.link_hover.observe(&event);
         self.refresh_link_hover(tui)?;
         self.invalidate_right_click_paste(&event);

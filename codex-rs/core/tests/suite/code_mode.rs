@@ -6788,7 +6788,7 @@ text(
 );
 "#;
 
-    let (_test, second_mock) =
+    let (test, second_mock) =
         run_code_mode_turn_with_rmcp(&server, "use exec to run the rmcp echo tool", code).await?;
 
     let req = second_mock.single_request();
@@ -6806,6 +6806,44 @@ isError=false
 contentLength=0"
     );
 
+    // Nested dispatch must produce the same durable MCP item consumed by the TUI.
+    test.codex.flush_rollout().await?;
+    let rollout = fs::read_to_string(
+        test.session_configured
+            .rollout_path
+            .as_ref()
+            .expect("rollout"),
+    )?;
+    let calls = rollout
+        .lines()
+        .map(codex_rollout::parse_rollout_line)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter_map(|row| match row.item {
+            codex_history::RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
+                match event.item {
+                    codex_protocol::items::TurnItem::McpToolCall(item) => {
+                        Some((item.server, item.tool, item.arguments))
+                    }
+                    _ => None,
+                }
+            }
+            codex_history::RolloutItem::EventMsg(EventMsg::McpToolCallEnd(event)) => Some((
+                event.invocation.server,
+                event.invocation.tool,
+                event.invocation.arguments.unwrap_or_default(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        calls.len(),
+        1,
+        "nested MCP must publish one completed UI item"
+    );
+    assert_eq!(calls[0].0, "rmcp");
+    assert_eq!(calls[0].1, "echo");
+    assert_eq!(calls[0].2, serde_json::json!({"message":"ping"}));
     Ok(())
 }
 

@@ -700,3 +700,80 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
     ];
     assert_eq!(refreshed, expected);
 }
+
+fn external_event(id: &str, text: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        id: Some(ResponseItemId::from_server(id.to_string())),
+        call_id: None,
+        name: Some("external_event".to_string()),
+        namespace: Some("external".to_string()),
+        output: FunctionCallOutputPayload::from_text(text.to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[test]
+fn local_compacted_history_keeps_current_turn_external_input() {
+    let old_user = user_message("weeks-old owner request");
+    let ask = external_event("msg-ask", "{\"type\":\"ask\",\"text\":\"current ask\"}");
+    let trimmed_ask = external_event("msg-ask", "{\"type\":\"ask\",\"text\":\"cur…\"}");
+    let history = annotated(vec![
+        old_user.clone(),
+        external_event("msg-past", "{\"text\":\"acknowledged earlier\"}"),
+        trimmed_ask,
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell_command".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call_1".to_string(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ]);
+    let retained = vec![ask.clone()];
+    let inputs = collect_annotated_compaction_inputs(&history, &retained);
+    let summary_text = format!("{SUMMARY_PREFIX}\nsummary");
+    let compacted = build_compacted_history(Vec::new(), &inputs, &summary_text);
+    let summary = ContextualUserFragment::into(CompactionSummary::new(summary_text));
+    assert_eq!(
+        raw(compacted.clone()),
+        vec![old_user.clone(), ask.clone(), summary.clone()]
+    );
+
+    let context = ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "initial context".to_string(),
+        }],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let installed = insert_initial_context_before_last_real_user_or_summary(
+        compacted,
+        annotated(vec![context.clone()]),
+    );
+    assert_eq!(raw(installed), vec![old_user, context, ask, summary]);
+}
+
+#[test]
+fn local_compacted_history_without_external_input_is_unchanged() {
+    let user = user_message("user");
+    let history = annotated(vec![
+        user.clone(),
+        external_event("msg-past", "{\"text\":\"past\"}"),
+    ]);
+    assert_eq!(
+        build_compacted_history(
+            Vec::new(),
+            &collect_annotated_compaction_inputs(&history, &[]),
+            "summary"
+        ),
+        build_compacted_history(
+            Vec::new(),
+            &collect_annotated_user_messages(&history),
+            "summary"
+        ),
+    );
+}

@@ -224,6 +224,55 @@ async fn pending_thread_metadata_rejects_rollout_path() {
     ));
 }
 
+#[tokio::test]
+async fn read_barrier_propagates_writer_failure_before_metadata_publication() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let thread_id = ThreadId::new();
+    let mut params = create_thread_params(thread_id);
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live = LiveThread::create(store, params).await.expect("create");
+    let path = live
+        .local_rollout_path()
+        .await
+        .expect("path read")
+        .expect("local path");
+    std::fs::create_dir_all(&path).expect("block writer file with directory");
+    let error = live
+        .persist_for_read()
+        .await
+        .expect_err("writer failure must propagate");
+    assert!(matches!(error, ThreadStoreError::Internal { .. }));
+    assert_eq!(
+        runtime.get_thread(thread_id).await.expect("metadata read"),
+        None
+    );
+    let _ = live.shutdown().await;
+}
+
+#[tokio::test]
+async fn read_barrier_propagates_metadata_failure_after_writer_success() {
+    let (_home, store, runtime) = store_with_runtime().await;
+    let mut params = create_thread_params(ThreadId::new());
+    params.history_mode = ThreadHistoryMode::Paginated;
+    let live = LiveThread::create(store, params).await.expect("create");
+    runtime.close().await;
+    let error = live
+        .persist_for_read()
+        .await
+        .expect_err("closed metadata store must propagate");
+    assert!(error.to_string().contains("closed pool"), "{error}");
+    let path = live
+        .local_rollout_path()
+        .await
+        .expect("path read")
+        .expect("local path");
+    let (items, _, _) = RolloutRecorder::load_rollout_items(&path)
+        .await
+        .expect("writer succeeded");
+    assert!(matches!(items.as_slice(), [RolloutItem::SessionMeta(_)]));
+    let _ = live.shutdown().await;
+}
+
 async fn store_with_runtime() -> (
     TempDir,
     Arc<LocalThreadStore>,

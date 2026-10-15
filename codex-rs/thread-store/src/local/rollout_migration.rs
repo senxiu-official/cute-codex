@@ -1135,6 +1135,7 @@ impl LocalThreadStore {
         let mut batch = Vec::new();
         let mut batch_start = 0_u64;
         let mut offset = 0_u64;
+        let mut external = codex_app_server_protocol::ExternalInputProjection::default();
 
         while let Some(record) = read_rollout_record(&mut reader, &mut line_bytes).await? {
             let next_offset = offset
@@ -1142,6 +1143,9 @@ impl LocalThreadStore {
                 .ok_or_else(|| migration_error("staged rollout byte offset overflow"))?;
             limiter.account(record.byte_count).await;
             let Some(line) = record.line else {
+                if external.is_pending() {
+                    return Err(migration_error("unreadable external input pair"));
+                }
                 offset = next_offset;
                 continue;
             };
@@ -1162,7 +1166,17 @@ impl LocalThreadStore {
                     changes: if is_inherited_subagent_history {
                         Default::default()
                     } else {
-                        project_rollout_line(&line)
+                        let mut changes = project_rollout_line(&line);
+                        if let Some(item) = external.observe(&line.item).map_err(migration_error)? {
+                            changes.changed_items.push(item);
+                        }
+                        changes
+                    },
+                    presentation: match &line.item {
+                        RolloutItem::EventMsg(
+                            codex_protocol::protocol::EventMsg::PresentationAppended(record),
+                        ) => Some(record.clone()),
+                        _ => None,
                     },
                     realtime_item: match line.item {
                         RolloutItem::RealtimeItem(item) if !is_inherited_subagent_history => {
@@ -1174,7 +1188,9 @@ impl LocalThreadStore {
             )));
             offset = next_offset;
 
-            if offset.saturating_sub(batch_start) >= PROJECTION_BATCH_BYTES {
+            if offset.saturating_sub(batch_start) >= PROJECTION_BATCH_BYTES
+                && !external.is_pending()
+            {
                 thread_history::apply_projection(
                     self,
                     thread_id,
@@ -1188,6 +1204,9 @@ impl LocalThreadStore {
             }
         }
 
+        if external.is_pending() {
+            return Err(migration_error("partial external input display pair"));
+        }
         if batch_start != offset {
             thread_history::apply_projection(
                 self,

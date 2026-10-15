@@ -1168,6 +1168,114 @@
       ],
       "type": "string"
     },
+    "ExternalInputAdmission": {
+      "description": "How a submitted item may start or join a turn.",
+      "oneOf": [
+        {
+          "description": "Pending until a safe input boundary; idle threads start an automatic turn.",
+          "enum": [
+            "queue"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Start a dedicated turn now, or fail with `busy` and queue nothing. The turn consumes this item, passive input, and no other active item. Requires an active delivery.",
+          "enum": [
+            "exclusive_turn"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ExternalInputDelivery": {
+      "enum": [
+        "after_turn",
+        "passive",
+        "soon"
+      ],
+      "type": "string"
+    },
+    "ExternalInputMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/definitions/ExternalInputDelivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalInputSource"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delivery",
+        "id",
+        "source",
+        "text",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ExternalInputMessageKey": {
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "semanticSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "semanticSha256"
+      ],
+      "type": "object"
+    },
+    "ExternalInputSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ExternalInputSourceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ExternalInputSourceKind": {
+      "enum": [
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ExternalInputView": {
+      "additionalProperties": false,
+      "properties": {
+        "data": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "schema"
+      ],
+      "type": "object"
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {
@@ -2198,7 +2306,7 @@
       "type": "string"
     },
     "MessagePhase": {
-      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "description": "Classifies assistant text as commentary, a partial answer, or a terminal answer.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
         {
           "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
@@ -2208,7 +2316,14 @@
           "type": "string"
         },
         {
-          "description": "The assistant's terminal answer text for the current turn.",
+          "description": "Stable answer text that may be followed by more assistant output or tools.",
+          "enum": [
+            "partial_answer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's declared terminal answer text for the current turn.",
           "enum": [
             "final_answer"
           ],
@@ -2709,6 +2824,71 @@
         "pluginNames"
       ],
       "type": "object"
+    },
+    "Presentation": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "default": "",
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/definitions/PresentationFormat"
+        },
+        "id": {
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/definitions/PresentationReference"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalInputSource"
+        },
+        "title": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "id",
+        "references",
+        "source"
+      ],
+      "type": "object"
+    },
+    "PresentationFormat": {
+      "enum": [
+        "plainText",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "PresentationReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/PresentationReferenceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PresentationReferenceKind": {
+      "enum": [
+        "externalInput",
+        "mcpInvocation"
+      ],
+      "type": "string"
     },
     "ProcessTerminalSize": {
       "description": "PTY size in character cells for `process/spawn` PTY sessions.",

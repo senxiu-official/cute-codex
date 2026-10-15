@@ -11,6 +11,7 @@ use crate::compact::InitialContextInjection;
 use crate::compact::build_compaction_initial_context;
 use crate::compact::compaction_status_from_result;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
+use crate::compact::retained_external_input;
 use crate::compact_model_fallback::record_model_fallback;
 use crate::compact_model_fallback::should_retry_with_current_model;
 use crate::compact_remote_history::HistoryItemGroup;
@@ -308,11 +309,15 @@ async fn run_remote_compact_task_inner_impl(
         analytics_details.cached_input_tokens = Some(token_usage.cached_input_tokens);
         analytics_details.cache_write_input_tokens = Some(token_usage.cache_write_input_tokens);
     }
+    let retained_external_inputs = sess
+        .external_input_items_retained_by_compaction(&turn_context.sub_id)
+        .await;
     let (compacted_history, retained_images) = build_v2_compacted_history(
         prompt_input,
         prompt_input_metadata,
         compaction_output,
         sess.enabled(Feature::RetainClientDeveloperMessages),
+        &retained_external_inputs,
         if sess.enabled(Feature::CompactionImageBudget) {
             RetainedImageBudget::Enabled
         } else {
@@ -506,6 +511,7 @@ fn build_v2_compacted_history(
     prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
     compaction_output: ResponseItem,
     retain_client_developer_messages: bool,
+    retained_external_inputs: &[ResponseItem],
     image_budget: RetainedImageBudget,
 ) -> (Vec<ResponseItemEnvelope>, usize) {
     debug_assert_eq!(prompt_input.len(), prompt_input_metadata.len());
@@ -515,8 +521,16 @@ fn build_v2_compacted_history(
         .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
         .collect::<Vec<_>>();
     let retained = v2_history_item_groups(prompt_input)
-        .filter(|group| {
-            is_retained_for_remote_compaction_v2(&group.source, retain_client_developer_messages)
+        .filter_map(|mut group| {
+            if is_retained_for_remote_compaction_v2(&group.source, retain_client_developer_messages)
+            {
+                return Some(group);
+            }
+            // The current turn's cutex input (ask / agent message) must survive compaction, or an
+            // older user message becomes the model's latest input. Keep the canonical item.
+            let canonical = retained_external_input(&group.source.item, retained_external_inputs)?;
+            group.source.item = canonical.clone();
+            Some(group)
         })
         .flat_map(HistoryItemGroup::into_items)
         .collect::<Vec<_>>();
@@ -813,6 +827,7 @@ mod tests {
             metadata,
             output,
             /*retain_client_developer_messages*/ false,
+            /*retained_external_inputs*/ &[],
             RetainedImageBudget::Disabled,
         )
     }
@@ -892,6 +907,104 @@ mod tests {
         );
     }
 
+    fn external_event(id: &str, text: &str) -> ResponseItem {
+        ResponseItem::FunctionCallOutput {
+            id: Some(codex_protocol::ResponseItemId::from_server(id.to_string())),
+            call_id: None,
+            name: Some("external_event".to_string()),
+            namespace: Some("external".to_string()),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(text.to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        }
+    }
+
+    #[test]
+    fn build_v2_compacted_history_keeps_current_turn_external_input() {
+        let old_user = message("user", "weeks-old owner request", /*phase*/ None);
+        let past_event = external_event("msg-past", "{\"text\":\"acknowledged earlier\"}");
+        let ask = external_event("msg-ask", "{\"type\":\"ask\",\"text\":\"current ask\"}");
+        let input = vec![
+            old_user.clone(),
+            past_event,
+            message("assistant", "ack", Some(MessagePhase::FinalAnswer)),
+            ask.clone(),
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell_command".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call_1".to_string(),
+                encrypted_function_args: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ];
+        let output = ResponseItem::Compaction {
+            id: None,
+            encrypted_content: "new".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+
+        let metadata = vec![None; input.len()];
+        let (history, _) = build_v2_compacted_history(
+            input,
+            metadata,
+            output.clone(),
+            /*retain_client_developer_messages*/ false,
+            std::slice::from_ref(&ask),
+            RetainedImageBudget::Disabled,
+        );
+        assert_eq!(
+            raw(history.clone()),
+            vec![old_user.clone(), ask.clone(), output.clone()]
+        );
+
+        // Initial context goes right above the ask, the model's latest real input.
+        let context = message("developer", "initial context", /*phase*/ None);
+        let installed = insert_initial_context_before_last_real_user_or_summary(
+            history,
+            vec![ResponseItemEnvelope::new(context.clone())],
+        );
+        assert_eq!(raw(installed), vec![old_user, context, ask, output]);
+    }
+
+    #[test]
+    fn build_v2_compacted_history_restores_trimmed_external_input_from_ledger() {
+        let ask = external_event("msg-ask", "{\"text\":\"full ask text\"}");
+        let trimmed = external_event("msg-ask", "{\"text\":\"full a…\"}");
+        let output = ResponseItem::Compaction {
+            id: None,
+            encrypted_content: "new".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let (history, _) = build_v2_compacted_history(
+            vec![trimmed],
+            vec![None],
+            output.clone(),
+            /*retain_client_developer_messages*/ false,
+            std::slice::from_ref(&ask),
+            RetainedImageBudget::Disabled,
+        );
+        assert_eq!(raw(history), vec![ask, output]);
+    }
+
+    #[test]
+    fn build_v2_compacted_history_drops_external_input_outside_current_turn() {
+        let user = message("user", "user", /*phase*/ None);
+        let output = ResponseItem::Compaction {
+            id: None,
+            encrypted_content: "new".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let (history, _) = build_without_metadata(
+            vec![
+                user.clone(),
+                external_event("msg-past", "{\"text\":\"past\"}"),
+            ],
+            output.clone(),
+        );
+        assert_eq!(raw(history), vec![user, output]);
+    }
+
     #[test]
     fn build_v2_compacted_history_preserves_retained_metadata_sidecar() {
         let retained = message("user", "keep", /*phase*/ None);
@@ -931,6 +1044,7 @@ mod tests {
                 ],
                 output.clone(),
                 enabled,
+                /*retained_external_inputs*/ &[],
                 RetainedImageBudget::Disabled,
             );
             let mut expected = vec![

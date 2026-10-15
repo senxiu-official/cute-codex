@@ -448,6 +448,20 @@
       ],
       "type": "string"
     },
+    "ExternalInputView": {
+      "additionalProperties": false,
+      "properties": {
+        "data": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "schema"
+      ],
+      "type": "object"
+    },
     "FileUpdateChange": {
       "properties": {
         "diff": {
@@ -818,7 +832,7 @@
       "type": "object"
     },
     "MessagePhase": {
-      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "description": "Classifies assistant text as commentary, a partial answer, or a terminal answer.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
         {
           "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
@@ -828,7 +842,14 @@
           "type": "string"
         },
         {
-          "description": "The assistant's terminal answer text for the current turn.",
+          "description": "Stable answer text that may be followed by more assistant output or tools.",
+          "enum": [
+            "partial_answer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's declared terminal answer text for the current turn.",
           "enum": [
             "final_answer"
           ],
@@ -1498,6 +1519,17 @@
         },
         {
           "properties": {
+            "externalInputView": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExternalInputView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "id": {
               "type": "string"
             },

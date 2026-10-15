@@ -123,6 +123,9 @@ use codex_terminal_detection::TerminalName;
     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
 )]
 struct MultitoolCli {
+    /// Use this private auth file independently of CODEX_HOME (Linux and Windows, local launch only).
+    #[arg(long, global = true, value_name = "ABS_PATH")]
+    auth_file: Option<std::path::PathBuf>,
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
 
@@ -303,6 +306,9 @@ struct DebugPromptInputCommand {
 
 #[derive(Debug, Parser)]
 struct DebugModelsCommand {
+    /// Report local model-catalog capabilities without loading config or credentials.
+    #[arg(long, conflicts_with = "bundled")]
+    capabilities: bool,
     /// Skip refresh and dump only the bundled catalog shipped with this binary.
     #[arg(long = "bundled", default_value_t = false)]
     bundled: bool,
@@ -1025,12 +1031,40 @@ async fn cli_main(
     remote_control_disabled: bool,
 ) -> anyhow::Result<()> {
     let MultitoolCli {
+        auth_file,
         config_overrides: mut root_config_overrides,
         feature_toggles,
         remote,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+    if interactive.status_items_file.is_some()
+        && !matches!(
+            &subcommand,
+            None | Some(Subcommand::Resume(_) | Subcommand::Fork(_))
+        )
+    {
+        anyhow::bail!("--status-items-file requires an interactive, resume, or fork TUI launch");
+    }
+    if auth_file.is_some() {
+        let local_supported = matches!(
+            &subcommand,
+            None | Some(
+                Subcommand::Exec(_)
+                    | Subcommand::Review(_)
+                    | Subcommand::Resume(_)
+                    | Subcommand::Fork(_)
+                    | Subcommand::Login(_)
+                    | Subcommand::Logout(_)
+            )
+        ) || matches!(&subcommand, Some(Subcommand::AppServer(command)) if command.subcommand.is_none());
+        if remote.remote.is_some() || !local_supported {
+            anyhow::bail!(
+                "--auth-file requires a supported local launch, not remote or lifecycle dispatch"
+            );
+        }
+    }
+    codex_login::configure_auth_file(auth_file)?;
     // Retain the launch target through TUI exit, even if a launcher changes selection.
     let daemon_cli_executable = arg0_paths
         .codex_self_exe
@@ -2069,6 +2103,10 @@ async fn run_debug_models_command(
     cmd: DebugModelsCommand,
     root_config_overrides: CliConfigOverrides,
 ) -> anyhow::Result<()> {
+    if cmd.capabilities {
+        println!("{{\"modelVariants\":true}}");
+        return Ok(());
+    }
     let catalog = if cmd.bundled {
         bundled_models_response()?
     } else {
@@ -2380,6 +2418,11 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
+    if remote.is_some() && interactive.sandbox_mode.is_some() {
+        return Ok(AppExitInfo::fatal(
+            "--sandbox is not supported for remote terminal sessions: it cannot safely override an already-loaded thread's permission profile. Configure and verify the receiver's permission profile before attaching.",
+        ));
+    }
     if interactive.no_daemon {
         if interactive.agents_overview {
             return Ok(AppExitInfo::fatal(
@@ -2650,6 +2693,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     let TuiCli {
         shared,
         strict_config,
+        status_items_file,
         approval_policy,
         web_search,
         no_alt_screen,
@@ -2658,6 +2702,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         mut config_overrides,
         ..
     } = subcommand_cli;
+    if status_items_file.is_some() {
+        interactive.status_items_file = status_items_file;
+    }
     let subcommand_auto_review = shared.auto_review;
     interactive
         .shared
@@ -2706,6 +2753,34 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_tui::TokenUsage;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn reviewed_status_items_follow_resume_and_fork_cli_selection() {
+        let resume = finalize_resume_from_args(&[
+            "codex",
+            "--status-items-file",
+            "/reviewed/parent.json",
+            "resume",
+            "--last",
+            "--status-items-file",
+            "/reviewed/selected.json",
+        ]);
+        assert_eq!(
+            resume.status_items_file,
+            Some(PathBuf::from("/reviewed/selected.json"))
+        );
+        let fork = finalize_fork_from_args(&[
+            "codex",
+            "--status-items-file",
+            "/reviewed/inherited.json",
+            "fork",
+            "--last",
+        ]);
+        assert_eq!(
+            fork.status_items_file,
+            Some(PathBuf::from("/reviewed/inherited.json"))
+        );
+    }
 
     #[test]
     fn interactive_tui_future_stays_bounded() {
@@ -2859,6 +2934,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
         interactive
             .shared
@@ -2896,6 +2972,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
         interactive
             .shared
@@ -2940,6 +3017,7 @@ mod tests {
             subcommand,
             feature_toggles: _,
             remote: _,
+            auth_file: _,
         } = cli;
 
         let Subcommand::Archive(SessionArchiveCommand {

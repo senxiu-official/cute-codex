@@ -43,6 +43,7 @@ pub(crate) fn codex_turn_trace_event(
     event: &EventMsg,
 ) -> Option<CodexTurnTraceEvent> {
     match event {
+        EventMsg::PresentationAppended(_) => None,
         EventMsg::TurnStarted(event) => {
             let codex_turn_id = event.turn_id.clone();
             Some(CodexTurnTraceEvent {
@@ -276,6 +277,7 @@ impl<'a> From<&'a ExecCommandEndEvent> for ExecCommandEndTracePayload<'a> {
 
 pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTraceEvent<'_>> {
     match event {
+        EventMsg::PresentationAppended(_) => None,
         EventMsg::ExecCommandBegin(event) if event.source != ExecCommandSource::UserShell => {
             Some(ToolRuntimeTraceEvent::Started {
                 tool_call_id: &event.call_id,
@@ -436,6 +438,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
 
 pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static str> {
     match event {
+        EventMsg::PresentationAppended(_) => None,
         EventMsg::SessionConfigured(_) => Some("session_configured"),
         EventMsg::TurnStarted(_) => Some("turn_started"),
         EventMsg::TurnComplete(_) => Some("turn_complete"),

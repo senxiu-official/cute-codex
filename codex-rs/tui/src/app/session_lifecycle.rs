@@ -441,6 +441,7 @@ impl App {
                     ));
                 }
                 let mut session = self.session_state_for_thread_read(thread_id, &thread).await;
+                session.presentation_timeline = app_server.presentation_timeline(thread_id).await?;
                 // Reads have no settings. Keep this cached thread's permissions rather than
                 // inferring them from the conversation that is currently displayed.
                 if let Some(channel) = self.thread_event_channels.get(&thread_id)
@@ -848,7 +849,7 @@ impl App {
             .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
             Ok(started) => {
-                self.chat_widget.mark_fresh_task_for_sparkle(&started);
+                self.chat_widget.sync_started_thread_sparkle(&started);
                 let thread_id = started.session.thread_id;
                 if started.task_tools_available {
                     app_server.remember_task_tool_thread(thread_id);
@@ -1104,18 +1105,12 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-        if matches!(
-            presentation,
-            ThreadAttachPresentation::Fresh | ThreadAttachPresentation::FreshWithDraft
-        ) {
-            self.chat_widget.mark_fresh_task_for_sparkle(&started);
-            // FreshWithDraft inherits its provisional greeting and replay at the handoff.
-            if matches!(presentation, ThreadAttachPresentation::Fresh) {
-                self.chat_widget
-                    .empty_state_animation
-                    .borrow_mut()
-                    .start_fresh();
-            }
+        self.chat_widget.sync_started_thread_sparkle(&started);
+        if matches!(presentation, ThreadAttachPresentation::Fresh) {
+            self.chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .start_fresh();
         }
         self.chat_widget
             .set_task_mentions_enabled(started.task_tools_available);

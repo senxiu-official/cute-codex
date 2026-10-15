@@ -9,6 +9,7 @@ use codex_protocol::models::ResponseItem;
 
 pub(crate) fn without_notification_media(notification: ServerNotification) -> ServerNotification {
     match notification {
+        ServerNotification::ThreadExternalInputStatusChanged(_) => notification,
         ServerNotification::ItemStarted(mut notification) => {
             notification.item = without_thread_item_media(notification.item);
             ServerNotification::ItemStarted(notification)
@@ -134,6 +135,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
         | ServerNotification::ThreadRealtimeClosed(_)
         | ServerNotification::WindowsWorldWritableWarning(_)
         | ServerNotification::WindowsSandboxSetupCompleted(_)
+        | ServerNotification::ThreadPresentationAppended(_)
         | ServerNotification::AccountLoginCompleted(_)
         | ServerNotification::GatewayOAuthChanged(_) => notification,
     }

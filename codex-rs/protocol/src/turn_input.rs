@@ -30,6 +30,8 @@ pub enum SuspendTurnOutcome {
 /// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TurnInput {
+    /// Trusted Core reservation for already admitted common external input.
+    ExternalInput,
     UserInput {
         content: Vec<UserInput>,
         client_id: Option<String>,
@@ -44,6 +46,7 @@ pub enum TurnInput {
 /// the corresponding `CodexThread` method.
 #[derive(Clone, Debug)]
 pub struct TurnInputRequest {
+    start_origin: TurnStartOrigin,
     pub input: TurnInput,
     pub thread_settings: ThreadSettingsOverrides,
     pub start: TurnStartOptions,
@@ -69,6 +72,7 @@ impl TurnInputRequest {
     /// Creates turn input that can be passed to one of the submission methods.
     pub fn new(input: TurnInput) -> Self {
         Self {
+            start_origin: TurnStartOrigin::Explicit,
             input,
             thread_settings: ThreadSettingsOverrides::default(),
             start: TurnStartOptions::default(),
@@ -76,6 +80,17 @@ impl TurnInputRequest {
             responsesapi_client_metadata: None,
             trace: None,
         }
+    }
+
+    /// Marks a background native dispatch, never inferred from serialized input.
+    /// This type is not serializable and is not a controller RPC authority field.
+    pub fn automatic_start(mut self) -> Self {
+        self.start_origin = TurnStartOrigin::Automatic;
+        self
+    }
+
+    pub fn start_origin(&self) -> TurnStartOrigin {
+        self.start_origin
     }
 
     /// Creates ordinary user input without a client-provided message id.
@@ -126,6 +141,13 @@ impl TurnInputRequest {
         self.trace = trace;
         self
     }
+}
+
+/// Trusted native call-site provenance, independent of message role or text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnStartOrigin {
+    Explicit,
+    Automatic,
 }
 
 /// How Core should route submitted turn input.
@@ -229,6 +251,9 @@ pub enum NotSubmittedReason {
 
     /// `start_turn_if_idle` yielded to higher-priority trigger-turn mailbox input.
     PendingTriggerTurn,
+
+    /// An automatic start cannot release a persisted interruption pause.
+    Interrupted,
 
     /// `start_turn_if_idle` received automatic non-user input for a turn that
     /// would run in Plan mode.

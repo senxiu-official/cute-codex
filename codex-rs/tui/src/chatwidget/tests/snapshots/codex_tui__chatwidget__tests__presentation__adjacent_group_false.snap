@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/presentation_tests.rs
+expression: normal
+---
+• Report 世界
+  safe bold
+  第二行
+
+  External input · service/build ·
+  message
+  Original input body

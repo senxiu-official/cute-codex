@@ -311,6 +311,29 @@ impl LiveThread {
             .await
     }
 
+    /// Materialize the writer and require pending metadata publication before hydration.
+    /// Unlike ordinary persistence, this cannot accept best-effort metadata indexing.
+    pub async fn persist_for_read(&self) -> ThreadStoreResult<()> {
+        self.thread_store
+            .persist_thread(self.thread_id, PersistContext::Standard)
+            .await?;
+        let update = self.metadata_sync.lock().await.take_pending_update();
+        if let Some(update) = update {
+            self.thread_store
+                .publish_thread_metadata(UpdateThreadMetadataParams {
+                    thread_id: self.thread_id,
+                    patch: update.patch.clone(),
+                    include_archived: true,
+                })
+                .await?;
+            self.metadata_sync
+                .lock()
+                .await
+                .mark_pending_update_applied(&update);
+        }
+        Ok(())
+    }
+
     pub async fn shutdown(&self) -> ThreadStoreResult<()> {
         let metadata_result = self
             .flush_pending_metadata_update_for_existing_history()
@@ -329,6 +352,15 @@ impl LiveThread {
 
     pub async fn discard(&self) -> ThreadStoreResult<()> {
         self.thread_store.discard_thread(self.thread_id).await
+    }
+
+    pub async fn load_presentation_history(&self) -> ThreadStoreResult<StoredThreadHistory> {
+        self.thread_store
+            .load_presentation_history(LoadThreadHistoryParams {
+                thread_id: self.thread_id,
+                include_archived: false,
+            })
+            .await
     }
 
     pub async fn load_history(

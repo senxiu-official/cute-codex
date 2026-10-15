@@ -175,6 +175,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_mcp_tool_call_started_now(&mut self, item: ThreadItem) {
+        if let ThreadItem::McpToolCall { id, .. } = &item
+            && self.transcript.grouped_mcp_seen.get(id) == Some(&true)
+        {
+            return;
+        }
         let ThreadItem::McpToolCall {
             id,
             server,
@@ -203,16 +208,31 @@ impl ChatWidget {
             return;
         }
         self.flush_active_cell();
-        self.transcript.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
+        let label = invocation
+            .arguments
+            .as_ref()
+            .and_then(|arguments| arguments["jobId"].as_str())
+            .map(|id| self.transcript.job_labels.label(id));
+        let mut cell = history_cell::new_active_mcp_tool_call(
             id,
             invocation,
             self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
-        )));
+        );
+        if let Some(label) = label {
+            cell.set_job_label(label);
+        }
+        self.transcript.active_cell = Some(Box::new(cell));
         self.bump_active_cell_revision();
         self.request_redraw();
     }
 
     pub(crate) fn handle_mcp_tool_call_completed_now(&mut self, item: ThreadItem) {
+        let receipt_label = self.transcript.job_labels.observe(&item);
+        if let ThreadItem::McpToolCall { id, .. } = &item
+            && self.transcript.grouped_mcp_seen.get(id) == Some(&true)
+        {
+            return;
+        }
         self.flush_answer_stream_with_separator();
 
         let Some(McpHistory {
@@ -224,6 +244,12 @@ impl ChatWidget {
         else {
             return;
         };
+        let label = invocation
+            .arguments
+            .as_ref()
+            .and_then(|args| args["jobId"].as_str())
+            .map(|id| self.transcript.job_labels.label(id))
+            .or(receipt_label);
 
         if invocation.is_computer_activity() {
             let call = history_cell::new_active_mcp_tool_call(
@@ -237,13 +263,19 @@ impl ChatWidget {
             return;
         }
 
+        let completed_id = id.clone();
         match self
             .transcript
             .active_cell
             .as_mut()
             .and_then(|cell| cell.as_any_mut().downcast_mut::<McpToolCallCell>())
         {
-            Some(cell) if cell.call_id() == id => cell.complete(duration, result),
+            Some(cell) if cell.call_id() == id => {
+                if let Some(label) = label {
+                    cell.set_job_label(label);
+                }
+                cell.complete(duration, result)
+            }
             _ => {
                 self.flush_active_cell();
                 let mut cell = history_cell::new_active_mcp_tool_call(
@@ -251,12 +283,18 @@ impl ChatWidget {
                     invocation,
                     self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
                 );
+                if let Some(label) = label {
+                    cell.set_job_label(label);
+                }
                 cell.complete(duration, result);
                 self.transcript.active_cell = Some(Box::new(cell));
             }
         };
 
         self.flush_active_cell();
+        if let Some(completed) = self.transcript.grouped_mcp_seen.get_mut(&completed_id) {
+            *completed = true;
+        }
     }
 
     /// Preserve pending calls and timers, returning the revisions before and after hydration.

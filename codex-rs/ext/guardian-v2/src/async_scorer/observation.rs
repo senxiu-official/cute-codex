@@ -177,7 +177,7 @@ impl GuardianV2Extension {
                 config
                     .config_layer_stack
                     .requirements()
-                    .auto_review_required_for_model(&model.slug)
+                    .auto_review_required_for_model_info(model)
             })
         {
             score_progress.clear_score();

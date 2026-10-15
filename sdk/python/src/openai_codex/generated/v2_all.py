@@ -1427,6 +1427,114 @@ class ExternalAgentImportedConnectorSource(RootModel[Literal["remoteMcpServersCo
     root: Literal["remoteMcpServersConfig"]
 
 
+class ExternalInputDelivery(Enum):
+    after_turn = "after_turn"
+    passive = "passive"
+    soon = "soon"
+
+
+class ExternalInputDeliveryState(Enum):
+    unknown = "unknown"
+    pending = "pending"
+    context_persisted = "context_persisted"
+    conflict = "conflict"
+    retryable_error = "retryable_error"
+
+
+class ExternalInputHoldReason(Enum):
+    canonical_size_policy = "canonical_size_policy"
+    plan_mode = "plan_mode"
+    interrupted = "interrupted"
+    request_uncertain = "request_uncertain"
+    no_output = "no_output"
+    context_missing = "context_missing"
+
+
+class ExternalInputMessageKey(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    message_id: Annotated[str, Field(alias="messageId")]
+    semantic_sha256: Annotated[str, Field(alias="semanticSha256")]
+
+
+class ExternalInputProcessingState(Enum):
+    none = "none"
+    pending = "pending"
+    claimed = "claimed"
+    output_observed = "output_observed"
+    held = "held"
+
+
+class ExternalInputProcessingStatus(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    attempt_id: Annotated[str | None, Field(alias="attemptId")] = None
+    reason: ExternalInputHoldReason | None = None
+    state: ExternalInputProcessingState
+
+
+class ExternalInputReceipt(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    message_id: Annotated[str, Field(alias="messageId")]
+    ordinal: Annotated[int, Field(ge=0)]
+    owner_id: Annotated[str, Field(alias="ownerId")]
+    receipt_id: Annotated[str, Field(alias="receiptId")]
+    response_item_id: Annotated[str, Field(alias="responseItemId")]
+    schema_: Annotated[str, Field(alias="schema")]
+    semantic_sha256: Annotated[str, Field(alias="semanticSha256")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class ExternalInputRetryDisposition(RootModel[Literal["released"]]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: Literal["released"]
+
+
+class ExternalInputSourceKind(Enum):
+    agent = "agent"
+    service = "service"
+
+
+class ExternalInputStatus(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    delivery_state: Annotated[ExternalInputDeliveryState, Field(alias="deliveryState")]
+    message_id: Annotated[str, Field(alias="messageId")]
+    processing: ExternalInputProcessingStatus
+    receipt: ExternalInputReceipt | None = None
+    semantic_sha256: Annotated[str, Field(alias="semanticSha256")]
+
+
+class ExternalInputStatusChangedNotification(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    message_id: Annotated[str, Field(alias="messageId")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ExternalInputView(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    data: Any
+    schema_: Annotated[str, Field(alias="schema")]
+
+
 class FeedbackRequirements(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2733,6 +2841,7 @@ class MergeStrategy(Enum):
 
 class MessagePhase(Enum):
     commentary = "commentary"
+    partial_answer = "partial_answer"
     final_answer = "final_answer"
 
 
@@ -3540,6 +3649,16 @@ class PluginsMigration(BaseModel):
     plugin_names: Annotated[list[str], Field(alias="pluginNames")]
 
 
+class PresentationFormat(Enum):
+    plain_text = "plainText"
+    markdown = "markdown"
+
+
+class PresentationReferenceKind(Enum):
+    external_input = "externalInput"
+    mcp_invocation = "mcpInvocation"
+
+
 class ProcessExitedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -4313,6 +4432,24 @@ class ServerDiagnosticsProcess(BaseModel):
         None
     )
     resident_memory_bytes: Annotated[int | None, Field(alias="residentMemoryBytes", ge=0)] = None
+
+
+class ThreadExternalInputStatusChangedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["thread/externalInput/statusChanged"],
+        Field(title="Thread/externalInput/statusChangedNotificationMethod"),
+    ]
+    params: ExternalInputStatusChangedNotification
 
 
 class ProjectChangedServerNotification(BaseModel):
@@ -8069,6 +8206,15 @@ class ExternalAgentImportedConnectorCandidate(BaseModel):
     source: ExternalAgentImportedConnectorSource
 
 
+class ExternalInputSource(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    id: str
+    kind: ExternalInputSourceKind
+
+
 class PathFileSystemPath(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8779,6 +8925,15 @@ class PluginShareUpdateTargetsResponse(BaseModel):
     )
     discoverability: PluginShareDiscoverability
     principals: list[PluginSharePrincipal]
+
+
+class PresentationReference(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    id: str
+    kind: PresentationReferenceKind
 
 
 class ProcessOutputDeltaNotification(BaseModel):
@@ -10230,6 +10385,14 @@ class ThreadTokenUsage(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    compaction_count: Annotated[
+        int | None,
+        Field(
+            alias="compactionCount",
+            description="Number of completed auto-compact windows. Absent for runtimes that do not provide an authoritative count.",
+            ge=0,
+        ),
+    ] = None
     last: TokenUsageBreakdown
     model_context_window: Annotated[int | None, Field(alias="modelContextWindow")] = None
     total: TokenUsageBreakdown
@@ -10726,6 +10889,18 @@ class ExternalAgentConfigMigrationItem(BaseModel):
     item_type: Annotated[ExternalAgentConfigMigrationItemType, Field(alias="itemType")]
 
 
+class ExternalInputMessage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    delivery: ExternalInputDelivery
+    id: str
+    source: ExternalInputSource
+    text: str
+    type: str
+
+
 class FileChangePatchUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10978,6 +11153,42 @@ class PluginSummary(BaseModel):
     ] = None
 
 
+class Presentation(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    body: str | None = ""
+    format: PresentationFormat
+    id: str
+    references: list[PresentationReference]
+    source: ExternalInputSource
+    title: str | None = ""
+
+
+class PresentationAppended(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    origin_thread_id: Annotated[str, Field(alias="originThreadId")]
+    owner_id: Annotated[str, Field(alias="ownerId")]
+    presentation: Presentation
+    receipt_id: Annotated[str, Field(alias="receiptId")]
+    semantic_sha256: Annotated[str, Field(alias="semanticSha256")]
+    version: Annotated[int, Field(ge=0)]
+
+
+class PresentationAppendedNotification(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    item: PresentationAppended
+    position: Annotated[int, Field(ge=0)]
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class FunctionCallOutputResponseItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11082,6 +11293,24 @@ class ThreadGoalUpdatedServerNotification(BaseModel):
         Literal["thread/goal/updated"], Field(title="Thread/goal/updatedNotificationMethod")
     ]
     params: ThreadGoalUpdatedNotification
+
+
+class ThreadPresentationAppendedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["thread/presentation/appended"],
+        Field(title="Thread/presentation/appendedNotificationMethod"),
+    ]
+    params: PresentationAppendedNotification
 
 
 class ThreadSettingsUpdatedServerNotification(BaseModel):
@@ -11313,6 +11542,9 @@ class FunctionCallOutputThreadItem(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    external_input_view: Annotated[ExternalInputView | None, Field(alias="externalInputView")] = (
+        None
+    )
     id: str
     name: str
     namespace: str | None = None
@@ -11412,6 +11644,15 @@ class ThreadItemsListResponse(BaseModel):
     ] = None
 
 
+class PresentationThreadTimelineEntry(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    item: PresentationAppended
+    position: Annotated[int, Field(ge=0)]
+    type: Annotated[Literal["presentation"], Field(title="PresentationThreadTimelineEntryType")]
+
+
 class ItemThreadTimelineEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11438,7 +11679,8 @@ class TurnCompletedThreadTimelineEntry(BaseModel):
 
 class ThreadTimelineEntry(
     RootModel[
-        ItemThreadTimelineEntry
+        PresentationThreadTimelineEntry
+        | ItemThreadTimelineEntry
         | RealtimeThreadTimelineEntry
         | TurnStartedThreadTimelineEntry
         | TurnCompletedThreadTimelineEntry
@@ -11448,7 +11690,8 @@ class ThreadTimelineEntry(
         populate_by_name=True,
     )
     root: Annotated[
-        ItemThreadTimelineEntry
+        PresentationThreadTimelineEntry
+        | ItemThreadTimelineEntry
         | RealtimeThreadTimelineEntry
         | TurnStartedThreadTimelineEntry
         | TurnCompletedThreadTimelineEntry,
@@ -12846,6 +13089,8 @@ class ServerNotification(
         | ThreadAttachmentUpdatedServerNotification
         | ThreadGoalUpdatedServerNotification
         | ThreadGoalClearedServerNotification
+        | ThreadPresentationAppendedServerNotification
+        | ThreadExternalInputStatusChangedServerNotification
         | ThreadQueueChangedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification
@@ -12935,6 +13180,8 @@ class ServerNotification(
         | ThreadAttachmentUpdatedServerNotification
         | ThreadGoalUpdatedServerNotification
         | ThreadGoalClearedServerNotification
+        | ThreadPresentationAppendedServerNotification
+        | ThreadExternalInputStatusChangedServerNotification
         | ThreadQueueChangedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification

@@ -72,6 +72,28 @@ pub struct InitializeCapabilities {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
+    /// Private launch-bound common ExternalInput control API version, when enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_input_version: Option<u32>,
+    /// Supported submit envelope versions; control status/retry remains v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_input_versions: Option<Vec<u32>>,
+    /// Durable display-only append/status and timeline support on the bound receiver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub presentation_version: Option<u32>,
+    /// Supported delivery modes for the private bound receiver. Absent on older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_input_deliveries: Option<Vec<codex_protocol::external_input::Delivery>>,
+    /// Owner admission and gate controls on the bound receiver: `exclusive_turn`
+    /// submit, `thread/externalInput/resume` and `thread/externalInput/interrupt`.
+    /// Absent on older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_input_control_version: Option<u32>,
     pub user_agent: String,
     /// Absolute path to the server's $CODEX_HOME directory.
     pub codex_home: AbsolutePathBuf,

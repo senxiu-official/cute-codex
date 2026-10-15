@@ -233,6 +233,11 @@ mod daemon_recovery;
 mod environment;
 mod extension_interruption;
 pub(crate) mod extension_metrics;
+mod external_input;
+mod external_input_dispatch;
+mod external_input_exclusive;
+mod external_input_migration;
+mod external_input_processing;
 mod guardian_checkpoint;
 mod handlers;
 mod inject;
@@ -664,12 +669,19 @@ impl Session {
                 "No models are available. Set `model` explicitly or check your model catalog configuration.".to_string(),
             ));
         }
+        // Resolve base instructions for the session. Priority order:
+        // 1. config.base_instructions override
+        // 2. conversation history => session_meta.base_instructions
+        // 3. rendered instructions_template for current model
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &config.to_models_manager_config())
+            .await;
         let trusted_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source)
             && !matches!(conversation_history, InitialHistory::Resumed(_));
         if config
             .config_layer_stack
             .requirements()
-            .auto_review_required_for_model(&model)
+            .auto_review_required_for_model_info(&model_info)
             && !trusted_guardian_reviewer
         {
             let config = Arc::make_mut(&mut config);
@@ -710,13 +722,6 @@ impl Session {
             );
         }
 
-        // Resolve base instructions for the session. Priority order:
-        // 1. config.base_instructions override
-        // 2. conversation history => session_meta.base_instructions
-        // 3. rendered instructions_template for current model
-        let model_info = models_manager
-            .get_model_info(model.as_str(), &config.to_models_manager_config())
-            .await;
         let auth = auth_manager.auth_cached();
         // Forked subagents keep their parent's activation with the copied history.
         // Fresh children restore configured preferences before applying startup defaults.
@@ -1444,6 +1449,11 @@ impl Session {
     pub(crate) async fn auto_compact_window_snapshot(&self) -> AutoCompactWindowSnapshot {
         let state = self.state.lock().await;
         state.auto_compact_window_snapshot()
+    }
+
+    pub(crate) async fn auto_compact_window_number(&self) -> u64 {
+        let state = self.state.lock().await;
+        state.auto_compact_window_number()
     }
 
     pub(crate) async fn estimated_tokens_after_last_model_generated_item(&self) -> i64 {
@@ -4036,7 +4046,7 @@ impl Session {
         server_model: String,
     ) -> bool {
         let turn_context = &step_context.turn;
-        let requested_model = step_context.settings.model_info.slug.clone();
+        let requested_model = step_context.settings.model_info.request_model().to_string();
         let server_model_normalized = server_model.to_ascii_lowercase();
         let requested_model_normalized = requested_model.to_ascii_lowercase();
         if server_model_normalized == requested_model_normalized {
@@ -5052,6 +5062,9 @@ impl Session {
     }
 
     pub async fn interrupt_task(self: &Arc<Self>) {
+        if let Err(err) = self.external_input_gate(true).await {
+            warn!(%err, "external input interruption gate could not be persisted; cancelling current work with dispatch still blocked");
+        }
         info!("interrupt received: abort current task, if any");
         let had_active_turn = self.active_turn.lock().await.is_some();
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
@@ -5214,3 +5227,5 @@ mod elicitation_holders_tests;
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+mod presentation;

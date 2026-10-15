@@ -299,11 +299,82 @@ async fn read_thread_from_rollout_path(
 pub(super) async fn load_history_items(
     path: &std::path::Path,
 ) -> ThreadStoreResult<Vec<codex_rollout::RolloutItem>> {
-    let (items, _, _) = RolloutRecorder::load_rollout_items(path)
-        .await
-        .map_err(|err| ThreadStoreError::Internal {
-            message: format!("failed to load thread history {}: {err}", path.display()),
-        })?;
+    load_history_items_with_policy(path, HistoryReadPolicy::Compatible).await
+}
+
+pub(super) async fn load_presentation_history_items(
+    path: &std::path::Path,
+) -> ThreadStoreResult<Vec<codex_rollout::RolloutItem>> {
+    load_history_items_with_policy(path, HistoryReadPolicy::Complete).await
+}
+
+enum HistoryReadPolicy {
+    Compatible,
+    Complete,
+}
+
+async fn load_history_items_with_policy(
+    path: &std::path::Path,
+    policy: HistoryReadPolicy,
+) -> ThreadStoreResult<Vec<codex_rollout::RolloutItem>> {
+    let (items, _, parse_errors) =
+        RolloutRecorder::load_rollout_items(path)
+            .await
+            .map_err(|err| ThreadStoreError::Internal {
+                message: format!("failed to load thread history {}: {err}", path.display()),
+            })?;
+    if parse_errors != 0 && matches!(policy, HistoryReadPolicy::Complete) {
+        return Err(ThreadStoreError::Internal {
+            message: "unreadable source history".into(),
+        });
+    }
+    let mut presentations = std::collections::BTreeMap::new();
+    for item in &items {
+        if let codex_rollout::RolloutItem::EventMsg(
+            codex_protocol::protocol::EventMsg::PresentationAppended(record),
+        ) = item
+        {
+            record
+                .validate()
+                .map_err(|error| ThreadStoreError::Internal {
+                    message: error.into(),
+                })?;
+            if let Some(previous) = presentations.insert(&record.presentation.id, record)
+                && previous != record
+            {
+                return Err(ThreadStoreError::Internal {
+                    message: "conflicting presentation history".into(),
+                });
+            }
+        }
+    }
+    let mut external = codex_app_server_protocol::ExternalInputProjection::default();
+    for item in &items {
+        external
+            .observe(item)
+            .map_err(|error| ThreadStoreError::Internal {
+                message: error.to_string(),
+            })?;
+    }
+    if external.is_pending() {
+        return Err(ThreadStoreError::Internal {
+            message: "partial external input history".into(),
+        });
+    }
+    if items
+        .iter()
+        .any(|item| matches!(item, codex_rollout::RolloutItem::ExternalInput(_)))
+    {
+        let mut builder = codex_app_server_protocol::ThreadHistoryBuilder::new();
+        for item in &items {
+            builder.handle_rollout_item(item);
+        }
+        builder
+            .finish_checked()
+            .map_err(|error| ThreadStoreError::Internal {
+                message: error.to_string(),
+            })?;
+    }
     Ok(items)
 }
 

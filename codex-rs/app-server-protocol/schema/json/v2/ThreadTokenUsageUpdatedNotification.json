@@ -3,6 +3,15 @@
   "definitions": {
     "ThreadTokenUsage": {
       "properties": {
+        "compactionCount": {
+          "description": "Number of completed auto-compact windows. Absent for runtimes that do not provide an authoritative count.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "last": {
           "$ref": "#/definitions/TokenUsageBreakdown"
         },

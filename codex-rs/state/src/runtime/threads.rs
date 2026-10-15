@@ -1368,6 +1368,7 @@ pub(super) fn extract_memory_mode(items: &[RolloutItem]) -> Option<String> {
         | RolloutItem::Compacted(_)
         | RolloutItem::TurnContext(_)
         | RolloutItem::WorldState(_)
+        | RolloutItem::ExternalInput(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)

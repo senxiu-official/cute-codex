@@ -152,6 +152,7 @@ enum RemoteClientCommand {
 
 #[derive(Default)]
 struct RemoteServerMetadata {
+    presentation_version: Option<u32>,
     server_version: Option<String>,
     codex_home: Option<String>,
     platform_family: Option<String>,
@@ -178,6 +179,10 @@ enum SocketPeerPolicy {
 }
 
 impl RemoteAppServerClient {
+    pub fn presentation_version(&self) -> Option<u32> {
+        self.metadata.presentation_version
+    }
+
     pub async fn connect(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
         Self::connect_with_policy(args, SocketPeerPolicy::ExplicitEndpoint).await
     }
@@ -852,6 +857,7 @@ where
                     })?;
                     match message {
                         JSONRPCMessage::Response(response) if response.id == initialize_request_id => {
+                            metadata.presentation_version = response.result.get("presentationVersion").and_then(serde_json::Value::as_u64).and_then(|v| u32::try_from(v).ok());
                             metadata.server_version = response
                                 .result
                                 .get("userAgent")

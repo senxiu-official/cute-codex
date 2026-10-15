@@ -13,6 +13,7 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_watch_manager: ThreadWatchManager,
     pub(super) codex_home: PathBuf,
     pub(super) thread_unload_delay: Duration,
+    pub(super) thread_unload_enabled: bool,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
     pub(super) turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
 }
@@ -217,6 +218,7 @@ pub(super) async fn ensure_listener_task_running(
     conversation: Arc<CodexThread>,
     thread_state: Arc<Mutex<ThreadState>>,
 ) -> Result<(), JSONRPCErrorError> {
+    let thread_unload_enabled = listener_task_context.thread_unload_enabled;
     let (cancel_tx, mut cancel_rx) = oneshot::channel();
     let Some(mut unloading_state) = UnloadingState::new(
         &listener_task_context,
@@ -360,7 +362,7 @@ pub(super) async fn ensure_listener_task_running(
                         let _ = completion_tx.send(());
                     }
                 }
-                unloading_watchers_open = unloading_state.wait_for_unloading_trigger() => {
+                unloading_watchers_open = unloading_state.wait_for_unloading_trigger(), if thread_unload_enabled => {
                     if !unloading_watchers_open {
                         break;
                     }

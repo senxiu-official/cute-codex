@@ -42,10 +42,15 @@ pub(super) async fn send_thread_token_usage_update_to_connection(
     let Some(info) = conversation.token_usage_info().await else {
         return;
     };
+    let compaction_count = conversation.auto_compact_window_number().await;
     let notification = ThreadTokenUsageUpdatedNotification {
         thread_id: thread_id.to_string(),
         turn_id: token_usage_turn_id,
-        token_usage: ThreadTokenUsage::from(info),
+        token_usage: {
+            let mut token_usage = ThreadTokenUsage::from(info);
+            token_usage.compaction_count = Some(compaction_count);
+            token_usage
+        },
     };
     outgoing
         .send_server_notification_to_connections(

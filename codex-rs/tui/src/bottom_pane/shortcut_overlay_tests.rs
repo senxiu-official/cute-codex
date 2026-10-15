@@ -14,6 +14,7 @@ use ratatui::backend::TestBackend;
 
 fn props() -> FooterProps {
     FooterProps {
+        status_line_prefix: Vec::new(),
         mode: FooterMode::ShortcutOverlay,
         esc_backtrack_hint: false,
         is_task_running: true,

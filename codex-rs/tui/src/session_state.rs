@@ -31,6 +31,8 @@ pub(crate) struct ThreadSessionState {
     pub(crate) windows_sandbox_host: crate::app::WindowsSandboxHost,
     pub(crate) thread_id: ThreadId,
     pub(crate) forked_from_id: Option<ThreadId>,
+    /// Read-only display timeline, never used as turn input.
+    pub(crate) presentation_timeline: Option<Vec<codex_app_server_protocol::ThreadTimelineEntry>>,
     pub(crate) fork_parent_title: Option<String>,
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,

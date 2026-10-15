@@ -20,6 +20,7 @@ const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "code
 
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
+    external_input_version: Option<u32>,
     gateway_login_control: Arc<codex_login::GatewayLoginControl>,
     gateway_login_initialized: Arc<std::sync::OnceLock<()>>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -31,6 +32,11 @@ pub(crate) struct InitializeRequestProcessor {
 }
 
 impl InitializeRequestProcessor {
+    pub(crate) fn with_external_input_version(mut self, version: Option<u32>) -> Self {
+        self.external_input_version = version;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         gateway_login_control: Arc<codex_login::GatewayLoginControl>,
@@ -42,6 +48,7 @@ impl InitializeRequestProcessor {
         user_verification: Arc<crate::user_verification::Service>,
     ) -> Self {
         Self {
+            external_input_version: None,
             gateway_login_control,
             gateway_login_initialized: Arc::new(std::sync::OnceLock::new()),
             outgoing,
@@ -211,6 +218,14 @@ impl InitializeRequestProcessor {
 
         let user_agent = get_codex_user_agent();
         let response = InitializeResponse {
+            external_input_version: self.external_input_version,
+            external_input_versions: self.external_input_version.map(|_| vec![1, 2]),
+            presentation_version: self.external_input_version,
+            external_input_deliveries: self.external_input_version.map(|_| {
+                use codex_protocol::external_input::Delivery;
+                vec![Delivery::AfterTurn, Delivery::Passive, Delivery::Soon]
+            }),
+            external_input_control_version: self.external_input_version.map(|_| 1),
             user_agent,
             codex_home,
             platform_family: std::env::consts::FAMILY.to_string(),

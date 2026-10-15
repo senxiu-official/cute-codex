@@ -12,6 +12,9 @@ mod current_time_reminder;
 mod developer_instructions;
 mod environment_context;
 mod environments_instructions;
+mod external_input;
+mod external_input_policy;
+pub use external_input_policy::CanonicalBytePolicy;
 mod guardian_approved_action;
 mod guardian_assistant_context;
 mod guardian_budget_omission;
@@ -135,3 +138,5 @@ pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;
 pub(crate) use user_verification_notice::UserVerificationNotice;
 pub(crate) use world_state::ManagedDeveloperInstructions;
+
+pub(crate) use external_input::ExternalInputContext;

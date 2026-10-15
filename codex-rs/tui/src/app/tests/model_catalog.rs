@@ -22,8 +22,26 @@ fn bedrock_model_presets() -> Vec<ModelPreset> {
     .expect("Bedrock model catalog")
 }
 
-#[tokio::test]
-async fn model_picker_refresh_updates_app_catalog_from_app_server() -> Result<()> {
+#[test]
+fn model_picker_refresh_updates_app_catalog_from_app_server() -> Result<()> {
+    // Keep the full model-loading dispatcher on the same enlarged test stack used by
+    // the other large App event tests; debug test threads otherwise overflow.
+    std::thread::Builder::new()
+        .name("tui-model-catalog-stack".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(async {
+                    model_picker_refresh_updates_app_catalog_from_app_server_inner().await
+                })
+        })?
+        .join()
+        .expect("model catalog stack test thread")
+}
+
+async fn model_picker_refresh_updates_app_catalog_from_app_server_inner() -> Result<()> {
     let (mut app, mut rx, _op_rx) = make_test_app_with_channels().await;
     let mut app_server = start_config_write_test_app_server(&app).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;

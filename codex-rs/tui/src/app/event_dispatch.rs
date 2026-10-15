@@ -142,7 +142,7 @@ impl App {
             }
             AppEvent::CloseMisalignmentReview => self.chat_widget.show_misalignment_policy_precaution(),
             AppEvent::SkillsListLoaded { ref cwd, .. }
-                if cwds_differ(cwd, self.config.cwd.as_path()) =>
+                if cwds_differ(cwd, self.chat_widget.config_ref().cwd.as_path()) =>
             {
                 self.skill_load_warnings.startup_complete = true;
             }
@@ -323,6 +323,21 @@ impl App {
                     && self.scrollback_has_older_history
                 {
                     self.request_older_history_page(app_server, thread_id);
+                }
+            }
+            AppEvent::ReconcilePresentations { thread_id } => {
+                app_server.request_presentation_reconcile(thread_id, self.app_event_tx.clone());
+            }
+            AppEvent::PresentationTimelineLoaded { thread_id, result } => {
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    match result {
+                        Ok(timeline) => for entry in timeline {
+                            if let codex_app_server_protocol::ThreadTimelineEntry::Presentation { position, item } = entry {
+                                self.enqueue_thread_notification(thread_id, codex_app_server_protocol::ServerNotification::ThreadPresentationAppended(codex_app_server_protocol::PresentationAppendedNotification { thread_id: thread_id.to_string(), position, item })).await?;
+                            }
+                        },
+                        Err(error) => self.chat_widget.add_error_message(format!("Could not reconcile durable notices: {error}")),
+                    }
                 }
             }
             AppEvent::OlderThreadHistoryLoaded {
@@ -1650,6 +1665,14 @@ impl App {
                 self.chat_widget
                     .finish_add_credits_nudge_email_request(request_id, result);
             }
+            AppEvent::ProviderRateLimitsLoaded { request_id, data, snapshots } => {
+                self.chat_widget.finish_provider_rate_limits(request_id, data, snapshots);
+                if self.overlay.is_some() || self.initial_history_replay_buffer.is_some() {
+                    self.pending_thread_usage_history_refresh = true;
+                } else {
+                    self.refresh_thread_usage_history_tail(tui)?;
+                }
+            }
             AppEvent::RateLimitsLoaded {
                 request_id,
                 origin,
@@ -1938,22 +1961,7 @@ impl App {
                     .await;
             }
             AppEvent::UpdateModel(model) => {
-                if self
-                    .active_thread_model_setting_update_params(model.clone())
-                    .is_some_and(|params| params.permissions.is_some())
-                    && self.reject_pending_permission_change()
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-                let model_changed = self.chat_widget.current_model() != model
-                    || self.chat_widget.current_collaboration_mode().model() != model;
-                if model_changed {
-                    self.chat_widget.set_model(&model);
-                    self.sync_active_thread_model_setting(app_server, model, /*effort*/ None)
-                        .await;
-                    self.sync_active_thread_service_tier_to_cached_session()
-                        .await;
-                }
+                Box::pin(self.apply_model_selection(app_server, model)).await?;
             }
             AppEvent::AstraSelectedFromModelPicker { .. } => unreachable!("picker event unwrapped"),
             AppEvent::BackgroundVoiceError { thread_id, message } => {
@@ -2070,56 +2078,8 @@ impl App {
                 self.chat_widget.open_advanced_reasoning_popup(model);
             }
             AppEvent::ApplyAdvancedReasoning { model, effort } => {
-                self.app_event_tx.send(AppEvent::FollowTranscript);
-                if self
-                    .active_thread_model_setting_update_params(model.clone())
-                    .is_some_and(|params| params.permissions.is_some())
-                    && self.reject_pending_permission_change()
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-                let model_changed = self.chat_widget.current_model() != model
-                    || self.chat_widget.current_collaboration_mode().model() != model;
-                let default_effort =
-                    self.on_apply_advanced_reasoning(model.as_str(), effort.clone());
-                if model_changed {
-                    self.sync_active_thread_model_setting(
-                        app_server,
-                        model.clone(),
-                        Some(effort.clone()),
-                    )
-                    .await;
-                } else if let Some(mut params) =
-                    self.active_thread_reasoning_setting_update_params(Some(effort.clone()))
-                {
-                    params.collaboration_mode =
-                        Some(self.chat_widget.effective_collaboration_mode());
-                    self.send_thread_settings_update(app_server, params).await;
-                }
-                self.sync_active_thread_service_tier_to_cached_session()
-                    .await;
-
-                if let Some(default_effort) = default_effort.as_ref()
-                    && let Err(err) = self.persist_model_defaults(
-                        app_server.request_handle(),
-                        crate::config_update::build_model_selection_edits(
-                            model.as_str(),
-                            Some(default_effort),
-                        ),
-                        "default model and reasoning effort",
-                    )
-                    .await
-                {
-                    let error = format_config_error(&err);
-                    tracing::error!(error = %error, "failed to persist conversation model");
-                    self.chat_widget
-                        .add_error_message(format!("Failed to save default model: {error}"));
-                } else {
-                    self.chat_widget.add_info_message(
-                        format!("Model changed to {model} {effort} for this conversation"),
-                        /*hint*/ None,
-                    );
-                }
+                Box::pin(self.apply_advanced_reasoning_selection(app_server, model, effort))
+                    .await?;
             }
             AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
                 self.chat_widget
@@ -2344,8 +2304,7 @@ impl App {
                 }
             }
             AppEvent::SelectSessionModel { model, effort } => {
-                self.app_event_tx.send(AppEvent::FollowTranscript);
-                self.select_session_model(app_server, model, effort).await;
+                Box::pin(self.select_session_model_and_follow(app_server, model, effort)).await?;
             }
             AppEvent::CyberModelAutoReviewNotice => {
                 self.chat_widget.add_warning_message(
@@ -2995,13 +2954,12 @@ impl App {
                 use_theme_colors,
             } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let items_edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
-                let colors_edit =
-                    crate::legacy_core::config::edit::status_line_use_colors_edit(use_theme_colors);
-                let apply_result = ConfigEditsBuilder::for_config_path(self.local_settings.user_config_path.as_path())
-                    .with_edits([items_edit, colors_edit])
-                    .apply()
-                    .await;
+                let apply_result = super::status_preferences::save(
+                    self.local_settings.user_config_path.as_path(),
+                    std::env::var_os("CUTEX_STATUS_LINE_CONFIG"),
+                    &ids,
+                    use_theme_colors,
+                ).await;
                 match apply_result {
                     Ok(()) => {
                         self.local_settings.tui.status_line = Some(ids.clone());
@@ -3212,6 +3170,98 @@ impl App {
             self.chat_widget
                 .on_sparkle_model_selected_from_picker(&model);
         }
+        Ok(AppRunControl::Continue)
+    }
+
+    /// Apply a model picker selection without re-entering the exhaustive event dispatcher.
+    async fn apply_model_selection(
+        &mut self,
+        app_server: &mut AppServerSession,
+        model: String,
+    ) -> Result<AppRunControl> {
+        if self
+            .active_thread_model_setting_update_params(model.clone())
+            .is_some_and(|params| params.permissions.is_some())
+            && self.reject_pending_permission_change()
+        {
+            return Ok(AppRunControl::Continue);
+        }
+        let model_changed = self.chat_widget.current_model() != model
+            || self.chat_widget.current_collaboration_mode().model() != model;
+        if model_changed {
+            self.chat_widget.set_model(&model);
+            self.sync_active_thread_model_setting(app_server, model, /*effort*/ None)
+                .await;
+            self.sync_active_thread_service_tier_to_cached_session()
+                .await;
+        }
+        Ok(AppRunControl::Continue)
+    }
+
+    /// Apply an advanced-reasoning picker selection without re-entering the event dispatcher.
+    async fn apply_advanced_reasoning_selection(
+        &mut self,
+        app_server: &mut AppServerSession,
+        model: String,
+        effort: ReasoningEffortConfig,
+    ) -> Result<AppRunControl> {
+        self.app_event_tx.send(AppEvent::FollowTranscript);
+        if self
+            .active_thread_model_setting_update_params(model.clone())
+            .is_some_and(|params| params.permissions.is_some())
+            && self.reject_pending_permission_change()
+        {
+            return Ok(AppRunControl::Continue);
+        }
+        let model_changed = self.chat_widget.current_model() != model
+            || self.chat_widget.current_collaboration_mode().model() != model;
+        let default_effort = self.on_apply_advanced_reasoning(model.as_str(), effort.clone());
+        if model_changed {
+            self.sync_active_thread_model_setting(app_server, model.clone(), Some(effort.clone()))
+                .await;
+        } else if let Some(mut params) =
+            self.active_thread_reasoning_setting_update_params(Some(effort.clone()))
+        {
+            params.collaboration_mode = Some(self.chat_widget.effective_collaboration_mode());
+            self.send_thread_settings_update(app_server, params).await;
+        }
+        self.sync_active_thread_service_tier_to_cached_session()
+            .await;
+
+        if let Some(default_effort) = default_effort.as_ref()
+            && let Err(err) = self
+                .persist_model_defaults(
+                    app_server.request_handle(),
+                    crate::config_update::build_model_selection_edits(
+                        model.as_str(),
+                        Some(default_effort),
+                    ),
+                    "default model and reasoning effort",
+                )
+                .await
+        {
+            let error = format_config_error(&err);
+            tracing::error!(error = %error, "failed to persist conversation model");
+            self.chat_widget
+                .add_error_message(format!("Failed to save default model: {error}"));
+        } else {
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} {effort} for this conversation"),
+                /*hint*/ None,
+            );
+        }
+        Ok(AppRunControl::Continue)
+    }
+
+    /// Apply a session-only model picker selection without re-entering the event dispatcher.
+    async fn select_session_model_and_follow(
+        &mut self,
+        app_server: &mut AppServerSession,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+    ) -> Result<AppRunControl> {
+        self.app_event_tx.send(AppEvent::FollowTranscript);
+        self.select_session_model(app_server, model, effort).await;
         Ok(AppRunControl::Continue)
     }
 

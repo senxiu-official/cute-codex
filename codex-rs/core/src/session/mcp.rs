@@ -895,10 +895,10 @@ async fn review_guardian_mcp_elicitation(
                 .approvals_reviewer
                 .can_set(&ApprovalsReviewer::AutoReview)
                 .is_err()
-            || crate::connectors::mcp_approvals_reviewer_from_layers(
+            || crate::connectors::mcp_approvals_reviewer_for_model(
                 &mcp_config.config_layer_stack,
                 ApprovalsReviewer::AutoReview,
-                Some(turn_context.model_info().slug.as_str()),
+                turn_context.model_info(),
                 request.server_name.as_str(),
                 connector_id,
                 /*link_id*/ None,
@@ -955,12 +955,12 @@ async fn review_guardian_mcp_elicitation(
             | AskForApproval::Granular(_) => {}
         }
 
-        let approvals_reviewer = crate::connectors::mcp_approvals_reviewer_from_layers(
+        let approvals_reviewer = crate::connectors::mcp_approvals_reviewer_for_model(
             &mcp_config.config_layer_stack,
             step_settings
                 .mcp_approvals_reviewer_override
                 .unwrap_or(mcp_config.approvals_reviewer),
-            Some(turn_context.model_info().slug.as_str()),
+            turn_context.model_info(),
             request.server_name.as_str(),
             elicitation_connector_id(&request.elicitation),
             /*link_id*/ None,

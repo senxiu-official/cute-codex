@@ -1,27 +1,16 @@
 //! Session configuration and thread-header orchestration for `ChatWidget`.
-//! Confirmed model-picker changes can offer the flourish only on their original task; the app
-//! checks the previous model when it applies the final selection.
 
 use super::*;
 use crate::style::accent_color;
 
 impl ChatWidget {
-    /// Offer the flourish only for a successful primary thread/start without initial work.
-    pub(crate) fn mark_fresh_task_for_sparkle(
+    /// Synchronize the persistent composer starfield with a thread's effective model.
+    pub(crate) fn sync_started_thread_sparkle(
         &mut self,
         started: &crate::app_server_session::AppServerStartedThread,
     ) {
-        if started.turns.is_empty()
-            && started.session.forked_from_id.is_none()
-            && !started.blocks_direct_input
-            && self.initial_user_message.is_none()
-            && !self.is_user_turn_pending_or_running()
-        {
-            self.bottom_pane
-                .mark_fresh_task_for_sparkle(&started.session.model, &self.local_settings.tui);
-        } else {
-            self.bottom_pane.dismiss_composer_sparkle();
-        }
+        self.bottom_pane
+            .sync_model_sparkle(&started.session.model, &self.local_settings.tui);
     }
 
     pub(crate) fn set_sparkle_terminal_focus(&mut self, focused: bool) {
@@ -40,7 +29,7 @@ impl ChatWidget {
     pub(crate) fn on_sparkle_model_selected_from_picker(&mut self, model: &str) {
         if self.current_model() == model {
             self.bottom_pane
-                .select_sparkle_model(model, &self.local_settings.tui);
+                .sync_model_sparkle(model, &self.local_settings.tui);
         }
     }
 
@@ -50,6 +39,7 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        self.transcript.presentation_timeline = session.presentation_timeline.clone();
         self.windows_sandbox_host =
             if !self.windows_sandbox_local_server && self.remote_connection.is_some() {
                 crate::app::WindowsSandboxHost::Remote
@@ -89,6 +79,10 @@ impl ChatWidget {
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
+            self.transcript.presentations_seen.clear();
+            self.transcript.job_labels = Default::default();
+            self.transcript.grouped_mcp_seen.clear();
+            self.transcript.pending_presentation_group = None;
             self.backend_banner_notice_model = None;
             self.automatic_model_switch_state =
                 backend_banners::AutomaticModelSwitchState::default();

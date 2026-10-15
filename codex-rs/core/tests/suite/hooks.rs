@@ -1948,6 +1948,15 @@ async fn async_hook_finishing_while_idle_waits_for_the_next_turn(
         .await
         .context("timed out waiting for the async hook to finish")?;
 
+    // Isolate the buffered result from the first hook. A second asynchronous
+    // context result may legitimately require another model response.
+    fs::write(
+        test.codex_home_path()
+            .join("async_user_prompt_submit_hook.py"),
+        "import sys\nsys.stdin.read()\n",
+    )
+    .context("make the next prompt hook a no-op")?;
+
     assert!(
         timeout(Duration::from_millis(150), test.codex.next_event())
             .await

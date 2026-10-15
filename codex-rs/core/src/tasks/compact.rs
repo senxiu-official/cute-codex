@@ -33,6 +33,10 @@ impl SessionTask for CompactTask {
         _input: Vec<TurnInput>,
         _cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
+        session
+            .ensure_external_input_policy_allows_sampling()
+            .await
+            .map_err(|error| codex_protocol::error::CodexErr::InvalidRequest(error.to_string()))?;
         let _profile_guard = ctx.turn_timing_state.begin_compaction();
         if ctx.config.features.enabled(Feature::TokenBudget) {
             crate::compact_token_budget::run_manual_compact_task(session, ctx).await?;

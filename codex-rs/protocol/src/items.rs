@@ -94,6 +94,9 @@ pub struct FunctionCallOutputItem {
     #[ts(optional)]
     pub namespace: Option<String>,
     pub output: FunctionCallOutputBody,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_input_view: Option<crate::external_input_view::View>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]

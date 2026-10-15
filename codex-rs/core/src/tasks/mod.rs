@@ -631,6 +631,9 @@ impl Session {
         turn_context: Arc<TurnContext>,
         task_result: SessionTaskResult,
     ) {
+        if let Err(err) = self.hold_abandoned_external_input_claims().await {
+            warn!(%err, "external input claim recovery required after task completion");
+        }
         let (last_agent_message, abort_reason) = match task_result {
             Ok(last_agent_message) => (last_agent_message, None),
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
@@ -668,6 +671,7 @@ impl Session {
         let Some(turn_state) = turn_state else {
             return;
         };
+        self.release_exclusive_external_input(&turn_state).await;
         let pending_input = self
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
@@ -883,6 +887,7 @@ impl Session {
         }
         if cleared_active_turn {
             self.maybe_start_turn_for_pending_work().await;
+            self.dispatch_external_input().await;
         }
     }
 
@@ -926,6 +931,7 @@ impl Session {
         error: Option<ErrorEvent>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
+        self.release_exclusive_external_input(turn_state).await;
         if task.cancellation_token.is_cancelled() {
             return;
         }
@@ -962,6 +968,9 @@ impl Session {
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))
             .await;
+        if let Err(err) = self.hold_abandoned_external_input_claims().await {
+            warn!(%err, "external input claim recovery required after task abort");
+        }
 
         if reason == TurnAbortReason::Interrupted
             && let Some(marker) = interrupted_turn_history_marker(

@@ -92,6 +92,7 @@ pub fn project_rollout_line(line: &RolloutLine) -> ThreadHistoryChangeSet {
         | RolloutItem::TurnContext(_)
         | RolloutItem::TokenUsageRecord(_)
         | RolloutItem::WorldState(_)
+        | RolloutItem::ExternalInput(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)

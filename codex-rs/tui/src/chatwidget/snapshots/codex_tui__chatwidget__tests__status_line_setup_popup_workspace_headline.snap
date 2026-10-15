@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_surface_previews.rs
-expression: status_line_popup_snapshot(&mut chat)
+expression: value
 ---
   Configure Status Line
   Select which items to display in the status line.
@@ -10,11 +10,11 @@ expression: status_line_popup_snapshot(&mut chat)
 › [x] Use theme colors      Apply colors from the active /theme
   ───────────────────────
   [x] workspace-headline    Workspace notification headline (Enterprise workspaces only; omitted wh…
-  [ ] model                 Current model name
-  [ ] model-with-reasoning  Current model name with reasoning level
-  [ ] reasoning             Current reasoning level
-  [ ] current-dir           Current working directory
-  [ ] project-name          Project name (omitted when unavailable)
+  [ ] C+ Notification       Cutex notification priority (Alt+N to cycle)
+  [ ] C+ Working Directory  Working directory with configurable display aliases
+  [ ] C+ Agent Name         Agent name and assigned project badge
+  [ ] C+ Context Remaining  Remaining context percentage
+  [ ] C+ Fable Limit Bar    Fable-only quota and reset countdown with progress bar
 ↓
   Workspace maintenance starts at 5pm
   space toggle · ←/→ reorder · enter save · esc cancel

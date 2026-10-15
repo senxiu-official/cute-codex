@@ -210,6 +210,9 @@ struct ForkHistory {
     snapshot: ForkSnapshot,
     initial_history: InitialHistory,
     persistence: ForkPersistence,
+    /// Complete source rollout to validate when `initial_history` is only a bounded model
+    /// context (reference-backed forks); copied forks validate `ResumedHistory::rollout_path`.
+    source_rollout_path: Option<PathBuf>,
 }
 
 /// Preserve legacy `fork_legacy_thread(usize, ...)` callsites by mapping them to the
@@ -400,6 +403,8 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// `Arc` reference that can be downgraded to by `LocalAgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
+    external_input_owner:
+        std::sync::OnceLock<(String, String, crate::context::CanonicalBytePolicy)>,
     // Eviction updates this registry and residency together, locking the registry first.
     pub(crate) threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
@@ -517,6 +522,24 @@ pub fn local_agent_graph_store_from_state_db(
 }
 
 impl ThreadManager {
+    /// Process launch binding only; never derived from model or RPC payloads.
+    #[expect(
+        clippy::expect_used,
+        reason = "builder is called once by the trusted launch path before sharing the manager"
+    )]
+    pub fn with_external_input_owner(
+        self,
+        owner: String,
+        thread: String,
+        policy: crate::context::CanonicalBytePolicy,
+    ) -> Self {
+        self.state
+            .external_input_owner
+            .set((owner, thread, policy))
+            .expect("external input owner is loaded once");
+        self
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: &Config,
@@ -564,6 +587,7 @@ impl ThreadManager {
             };
         Self {
             state: Arc::new(ThreadManagerState {
+                external_input_owner: std::sync::OnceLock::new(),
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 shared_thread_instructions: Default::default(),
                 thread_created_tx,
@@ -736,6 +760,7 @@ impl ThreadManager {
         let agent_graph_store = local_agent_graph_store_from_state_db(state_db.as_ref());
         Self {
             state: Arc::new(ThreadManagerState {
+                external_input_owner: std::sync::OnceLock::new(),
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 shared_thread_instructions: Default::default(),
                 thread_created_tx,
@@ -1165,6 +1190,7 @@ impl ThreadManager {
         mut options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
         let fork_source = self.get_thread(forked_from_thread_id).await?;
+        let _external_input_guard = fork_source.session.external_input_migration_guard().await?;
         // Persist queued rollout updates before reading the fork snapshot.
         fork_source.ensure_rollout_materialized().await;
         fork_source.flush_rollout().await?;
@@ -1179,6 +1205,8 @@ impl ThreadManager {
                 ))
             })?;
         let history = stored_thread_to_initial_history(stored_thread, fork_source.rollout_path())?;
+        crate::external_input::recovery::ensure_migration_allowed(history.get_rollout_items())
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
         let inherited_multi_agent_version = fork_source
             .multi_agent_version()
             .unwrap_or(MultiAgentVersion::V1);
@@ -1480,6 +1508,7 @@ impl ThreadManager {
                 snapshot: snapshot.into(),
                 initial_history: history,
                 persistence: ForkPersistence::Copied,
+                source_rollout_path: None,
             },
         )
         .await
@@ -1507,6 +1536,7 @@ impl ThreadManager {
                     snapshot: ForkSnapshot::Interrupted,
                     initial_history: history,
                     persistence: fork_persistence,
+                    source_rollout_path: prepared.source_rollout_path.clone(),
                 },
             )
             .await;
@@ -1523,7 +1553,54 @@ impl ThreadManager {
             snapshot,
             initial_history: history,
             persistence: fork_persistence,
+            source_rollout_path,
         } = fork_history;
+        // Only the local store owns on-disk rollout bytes. Other stores can
+        // expose logical rollout paths; their typed history is checked below.
+        let full_history_path = match (&history, source_rollout_path.as_ref()) {
+            (_, Some(path)) => Some(path),
+            (InitialHistory::Resumed(resumed), None) => resumed.rollout_path.as_ref(),
+            _ => None,
+        };
+        let mut full_history_checked = false;
+        if self.state.thread_store.as_any().is::<LocalThreadStore>()
+            && let Some(path) = full_history_path
+        {
+            let (items, _, parse_errors) =
+                codex_rollout::RolloutRecorder::load_rollout_items(path).await?;
+            if parse_errors != 0 {
+                return Err(CodexErr::InvalidRequest(
+                    "unreadable fork source history".into(),
+                ));
+            }
+            crate::external_input::recovery::ensure_fork_allowed(&items)
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+            full_history_checked = true;
+        }
+        // A reference-backed fork's history is the bounded model context: it starts at the newest
+        // compaction, mid-way through the ExternalInput ledger, and would read as corrupt. Its
+        // complete source rollout was validated above.
+        let bounded_context = matches!(fork_persistence, ForkPersistence::Referenced { .. });
+        if !(bounded_context && full_history_checked) {
+            crate::external_input::recovery::ensure_fork_allowed(history.get_rollout_items())
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        }
+        let live_source = if let InitialHistory::Resumed(resumed) = &history {
+            self.get_thread(resumed.conversation_id)
+                .await
+                .ok()
+                .filter(|thread| thread.is_running())
+        } else {
+            None
+        };
+        let _external_input_guard = if let Some(source) = live_source.as_ref() {
+            Some(source.session.external_input_fork_guard().await?)
+        } else {
+            None
+        };
+        // The child is never bound to the source's ExternalInput owner (see `spawn_thread`), so
+        // its history carries no ledger facts: unfinished obligations stay with the source.
+        let (history, fork_persistence) = strip_fork_external_input(history, fork_persistence);
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
         let source_thread_id = match &history {
@@ -1533,28 +1610,52 @@ impl ThreadManager {
         };
         // Capture the live source before later startup work can unload it. Keep
         // the fork's own providers, not the source's task-bound callback.
-        let instructions = self
-            .state
-            .instructions_for_spawn(
-                options
-                    .session_source
-                    .as_ref()
-                    .unwrap_or(&self.state.session_source),
-                /*parent_thread_id*/ None,
-                source_thread_id,
+        let session_source = options
+            .session_source
+            .clone()
+            .unwrap_or_else(|| self.state.session_source.clone());
+        let instructions = if let InitialHistory::Resumed(_) = &history {
+            let inherited = match live_source.as_ref() {
+                Some(source) => source.session.inherited_instructions().await,
+                None => SessionInstructions::default(),
+            };
+            self.state.instructions_for_spawn_from_inherited(
+                &session_source,
                 options.thread_instructions_provider.clone(),
+                inherited,
             )
-            .await;
-        let multi_agent_version = self
-            .state
-            .effective_multi_agent_version_for_spawn(
-                &history,
-                /*session_source*/ None,
-                /*parent_thread_id*/ None,
-                source_thread_id,
-                &options.config,
-            )
-            .await;
+        } else {
+            self.state
+                .instructions_for_spawn(
+                    &session_source,
+                    /*parent_thread_id*/ None,
+                    source_thread_id,
+                    options.thread_instructions_provider.clone(),
+                )
+                .await
+        };
+        let multi_agent_version = if let InitialHistory::Resumed(_) = &history {
+            let inherited = live_source
+                .as_ref()
+                .and_then(|source| source.multi_agent_version());
+            options
+                .config
+                .multi_agent_version_override()
+                .unwrap_or_else(|| {
+                    resolve_multi_agent_version(&history, inherited)
+                        .unwrap_or_else(|| options.config.multi_agent_version_from_features())
+                })
+        } else {
+            self.state
+                .effective_multi_agent_version_for_spawn(
+                    &history,
+                    /*session_source*/ None,
+                    /*parent_thread_id*/ None,
+                    source_thread_id,
+                    &options.config,
+                )
+                .await
+        };
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config_and_version(
             &options.config,
             multi_agent_version,
@@ -1821,6 +1922,19 @@ impl ThreadManagerState {
             },
             None => SessionInstructions::default(),
         };
+        if session_source.is_non_root_agent() {
+            inherited
+        } else {
+            self.instructions_for_spawn_from_inherited(session_source, thread_provider, inherited)
+        }
+    }
+
+    fn instructions_for_spawn_from_inherited(
+        &self,
+        session_source: &SessionSource,
+        thread_provider: Option<Arc<dyn ThreadInstructionsProvider>>,
+        inherited: SessionInstructions,
+    ) -> SessionInstructions {
         if session_source.is_non_root_agent() {
             inherited
         } else {
@@ -2329,6 +2443,17 @@ impl ThreadManagerState {
             windows_sandbox_proxy_settings_mode,
         })
         .await?;
+        if let Some((owner, thread, policy)) = self.external_input_owner.get()
+            && *thread == session.thread_id.to_string()
+            && let Err(error) = session.bind_external_input(owner, *policy).await
+        {
+            // Closing the sole submission sender tears down this unpublished
+            // session. Wait for its writer before allowing a caller to retry.
+            let termination = io.session_loop_termination.clone();
+            drop(io);
+            termination.await;
+            return Err(CodexErr::InvalidRequest(error.to_string()));
+        }
         if let Some(source_thread_id) = attachment_source
             && session.live_thread().is_some()
             && self.thread_store.supports_thread_attachments()
@@ -2364,6 +2489,7 @@ impl ThreadManagerState {
         }
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
+            new_thread.thread.session.dispatch_external_input().await;
         }
         Ok(new_thread)
     }
@@ -2594,6 +2720,49 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         active_turn_started_at: None,
         active_turn_start_index: None,
     }
+}
+
+/// Remove ExternalInput ledger facts from a fork's inherited history. A reference-backed fork
+/// keeps its inherited prefix behind `history_base`; only the in-memory count shrinks.
+fn strip_fork_external_input(
+    history: InitialHistory,
+    persistence: ForkPersistence,
+) -> (InitialHistory, ForkPersistence) {
+    let (history, removed) = match history {
+        InitialHistory::Forked(mut items) => {
+            let removed = crate::external_input::recovery::strip_fork_ledger(&mut items);
+            (InitialHistory::Forked(items), removed)
+        }
+        InitialHistory::Resumed(resumed)
+            if resumed
+                .history
+                .iter()
+                .any(|item| matches!(item, RolloutItem::ExternalInput(_))) =>
+        {
+            let mut items = Arc::unwrap_or_clone(resumed.history);
+            let removed = crate::external_input::recovery::strip_fork_ledger(&mut items);
+            (
+                InitialHistory::Resumed(ResumedHistory {
+                    conversation_id: resumed.conversation_id,
+                    history: Arc::new(items),
+                    rollout_path: resumed.rollout_path,
+                }),
+                removed,
+            )
+        }
+        history => (history, 0),
+    };
+    let persistence = match persistence {
+        ForkPersistence::Referenced {
+            history_base,
+            inherited_item_count,
+        } => ForkPersistence::Referenced {
+            history_base,
+            inherited_item_count: inherited_item_count.saturating_sub(removed),
+        },
+        persistence => persistence,
+    };
+    (history, persistence)
 }
 
 fn fork_history_from_snapshot(

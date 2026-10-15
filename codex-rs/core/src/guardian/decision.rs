@@ -62,7 +62,7 @@ pub(crate) async fn decide_approval(
     let live_config = session.get_config().await;
     let requirements = live_config.config_layer_stack.requirements();
     let model_requires_review =
-        requirements.auto_review_required_for_model(&context.model_info.slug);
+        requirements.auto_review_required_for_model_info(&context.model_info);
     let require_guardian = options.require_guardian
         || model_requires_review
         || requirements

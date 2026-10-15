@@ -4,6 +4,14 @@
     "AbsolutePathBuf": {
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
+    },
+    "ExternalInputDelivery": {
+      "enum": [
+        "after_turn",
+        "passive",
+        "soon"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -15,6 +23,46 @@
       ],
       "description": "Absolute path to the server's $CODEX_HOME directory."
     },
+    "externalInputControlVersion": {
+      "description": "Owner admission and gate controls on the bound receiver: `exclusive_turn` submit, `thread/externalInput/resume` and `thread/externalInput/interrupt`. Absent on older servers.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "externalInputDeliveries": {
+      "description": "Supported delivery modes for the private bound receiver. Absent on older servers.",
+      "items": {
+        "$ref": "#/definitions/ExternalInputDelivery"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "externalInputVersion": {
+      "description": "Private launch-bound common ExternalInput control API version, when enabled.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "externalInputVersions": {
+      "description": "Supported submit envelope versions; control status/retry remains v1.",
+      "items": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "platformFamily": {
       "description": "Platform family for the running app-server target, for example `\"unix\"` or `\"windows\"`.",
       "type": "string"
@@ -22,6 +70,15 @@
     "platformOs": {
       "description": "Operating system for the running app-server target, for example `\"macos\"`, `\"linux\"`, or `\"windows\"`.",
       "type": "string"
+    },
+    "presentationVersion": {
+      "description": "Durable display-only append/status and timeline support on the bound receiver.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "userAgent": {
       "type": "string"

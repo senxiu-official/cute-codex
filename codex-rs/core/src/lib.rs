@@ -35,6 +35,7 @@ mod compact_model_fallback;
 mod compact_remote_history;
 mod compact_remote_v2;
 mod compact_token_budget;
+mod external_input;
 mod thread_startup_metadata;
 pub use codex_network_proxy::EnvironmentNetworkPolicy;
 pub use codex_network_proxy::NetworkDomainPermission;

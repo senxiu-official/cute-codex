@@ -46,6 +46,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::ToolSchemaCompat;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
@@ -345,6 +346,11 @@ pub struct ConfigToml {
     /// unloads it. Defaults to 60; zero unloads immediately. Changes require a server restart.
     pub thread_unload_delay_secs: Option<u64>,
 
+    /// Automatically unload idle app-server threads after their last subscriber disconnects.
+    /// Defaults to true. Persistent hosts may disable this; explicit shutdown still works.
+    /// Changes require a server restart.
+    pub thread_unload_enabled: Option<bool>,
+
     /// Deprecated: ignored.
     #[schemars(skip)]
     pub js_repl_node_path: Option<AbsolutePathBuf>,
@@ -468,6 +474,12 @@ pub struct ConfigToml {
 
     /// Controls the web search tool mode: disabled, cached, indexed, or live.
     pub web_search: Option<WebSearchMode>,
+
+    /// Compatibility lowering of tool parameter schemas sent to the model:
+    /// `off` (default, unchanged) or `strict` (every `enum` gets one `type`
+    /// that all of its values share; for providers whose function
+    /// declarations refuse mixed, typeless or nullable enums).
+    pub tool_schema_compat: Option<ToolSchemaCompat>,
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,

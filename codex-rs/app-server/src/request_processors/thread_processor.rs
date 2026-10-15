@@ -1089,6 +1089,7 @@ impl ThreadRequestProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
+            thread_unload_enabled: self.config.thread_unload_enabled,
             skills_watcher: Arc::clone(&self.skills_watcher),
             turn_cost_worker: self.turn_cost_worker.clone(),
         }
@@ -1220,6 +1221,7 @@ impl ThreadRequestProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
+            thread_unload_enabled: self.config.thread_unload_enabled,
             skills_watcher: Arc::clone(&self.skills_watcher),
             turn_cost_worker: self.turn_cost_worker.clone(),
         };
@@ -3050,8 +3052,8 @@ impl ThreadRequestProcessor {
                 thread.history_mode,
                 codex_app_server_protocol::ThreadHistoryMode::Paginated
             ) {
-                self.thread_store
-                    .persist_thread(thread_id, PersistContext::Standard)
+                loaded_thread
+                    .persist()
                     .await
                     .map_err(|err| thread_read_history_load_error(thread_id, err))?;
                 thread.turns = self
@@ -4348,11 +4350,16 @@ impl ThreadRequestProcessor {
                 let is_running =
                     matches!(existing_thread.agent_status().await, AgentStatus::Running);
 
-                // Parent-owned V2 children must not be rebuilt from public resume overrides.
-                if can_accept_direct_input(
-                    existing_thread.multi_agent_version(),
-                    &config_snapshot.session_source,
-                ) && !has_subscribers
+                // Persistent hosts rejoin the resident thread even when reconnect requests
+                // repeat launch overrides. Rebuilding an idle root would discard its child
+                // tree just like subscriber-based unloading. Parent-owned V2 children also
+                // must not be rebuilt from public resume overrides.
+                if self.config.thread_unload_enabled
+                    && can_accept_direct_input(
+                        existing_thread.multi_agent_version(),
+                        &config_snapshot.session_source,
+                    )
+                    && !has_subscribers
                     && matches!(loaded_status, ThreadStatus::Idle)
                     && !is_running
                 {
@@ -4376,8 +4383,8 @@ impl ThreadRequestProcessor {
                     }
                 }
 
-                // Preserve rejoin semantics when another client can still observe
-                // the loaded thread or shutdown did not complete.
+                // Preserve rejoin semantics for persistent hosts, when another client can
+                // still observe the loaded thread, or when shutdown did not complete.
                 tracing::warn!(
                     "thread/resume overrides ignored for loaded thread {}: {}",
                     existing_thread_id,

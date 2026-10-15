@@ -33,6 +33,16 @@ pub(super) struct StatusCopySource {
 
 #[derive(Default)]
 pub(super) struct TranscriptState {
+    /// Completion time of the turn currently being replayed; never the resume wall clock.
+    pub(super) pending_presentation_group: Option<crate::history_cell::PendingPresentationGroup>,
+    pub(super) grouped_mcp_seen: std::collections::HashMap<String, bool>,
+    pub(super) job_labels: crate::history_cell::JobLabels,
+    pub(super) presentation_timeline: Option<Vec<codex_app_server_protocol::ThreadTimelineEntry>>,
+    pub(super) presentations_seen: std::collections::BTreeMap<
+        (String, String),
+        codex_protocol::presentation::PresentationAppended,
+    >,
+    pub(super) external_inputs_seen: std::collections::HashSet<(String, String)>,
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
     /// Shared retained rows for concurrently running dynamic tools, removed on completion.
     pub(super) dynamic_calls:

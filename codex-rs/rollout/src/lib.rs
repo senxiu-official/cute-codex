@@ -83,6 +83,38 @@ pub fn parse_rollout_line_bytes(bytes: &[u8]) -> serde_json::Result<RolloutLine>
     serde_json::from_slice::<Value>(bytes).and_then(decode_rollout_line)
 }
 
+/// Returns whether a persisted record is a retired Cutex fork record that current protocol
+/// types no longer decode and readers should drop silently: K-format `InterAgentMessage`
+/// display items carried in `item_started` / `item_completed` events.
+pub fn is_retired_rollout_line(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("event_msg")
+        && value.get("payload").is_some_and(|payload| {
+            matches!(
+                payload.get("type").and_then(Value::as_str),
+                Some("item_started" | "item_completed")
+            ) && payload.pointer("/item/type").and_then(Value::as_str) == Some("InterAgentMessage")
+        })
+}
+
+/// Returns whether a rollout line is crash residue: it contains at least one raw NUL byte and is
+/// either nothing but NUL bytes and ASCII whitespace otherwise, or not valid JSON (a torn record).
+///
+/// A power loss during delayed allocation can leave a zero-filled range where the last record(s)
+/// were being written, possibly after the surviving prefix of a record. The writer never emits a
+/// raw NUL (serde escapes control characters and JSON requires it), so a raw NUL can only come
+/// from storage loss. Readers skip such lines (with a warning) instead of counting them as
+/// malformed JSON. A line that parses is never residue, and a line without a NUL byte keeps the
+/// normal malformed-record handling.
+pub fn is_crash_residue_line(bytes: &[u8]) -> bool {
+    if !bytes.contains(&0) {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|byte| *byte == 0 || byte.is_ascii_whitespace())
+        || serde_json::from_slice::<serde::de::IgnoredAny>(bytes).is_err()
+}
+
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock::new(|| {

@@ -11,3 +11,5 @@ pub mod thread_history_projection;
 mod turn_items_view;
 pub mod v1;
 pub mod v2;
+
+pub mod external_input_projection;

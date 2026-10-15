@@ -102,6 +102,10 @@ impl ChatWidget {
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
     pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
+        if let Some(timeline) = self.transcript.presentation_timeline.take() {
+            self.replay_presentation_timeline(turns, timeline, replay_kind);
+            return;
+        }
         if !turns.is_empty() || matches!(replay_kind, ReplayKind::ThreadSnapshot) {
             self.bottom_pane.dismiss_composer_sparkle();
         }
@@ -430,11 +434,30 @@ impl ChatWidget {
                 self.on_context_compaction_completed(&id, from_replay);
             }
             ThreadItem::FunctionCallOutput {
+                id,
                 name,
                 namespace,
                 output,
-                ..
+                external_input_view,
             } => {
+                if let Some(mut cell) = history_cell::ExternalInputHistoryCell::parse(
+                    &id,
+                    &name,
+                    namespace.as_deref(),
+                    &output,
+                    external_input_view.as_ref(),
+                ) {
+                    if let Some(thread_id) = self.thread_id
+                        && self
+                            .transcript
+                            .external_inputs_seen
+                            .insert((thread_id.to_string(), id))
+                    {
+                        cell.observe_display_id(&mut self.transcript.job_labels);
+                        self.add_to_history(cell);
+                    }
+                    return;
+                }
                 if let Some((source_thread_id, prompt)) =
                     crate::dynamic_tools::parse_delegated_tool_output(
                         &name,
@@ -472,7 +495,14 @@ impl ChatWidget {
                 agents_states,
             }),
             item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
-            item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
+            item @ ThreadItem::DynamicToolCall { .. } => {
+                if matches!(&item, ThreadItem::DynamicToolCall { namespace, .. } if namespace.as_deref() == Some("claude"))
+                {
+                    self.on_claude_tool(item);
+                } else {
+                    self.on_dynamic_tool_item(item);
+                }
+            }
             ThreadItem::Sleep(_) => {}
         }
 

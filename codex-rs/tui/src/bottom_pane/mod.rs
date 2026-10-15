@@ -82,6 +82,7 @@ mod multi_select_picker;
 mod question_tests;
 mod questions;
 mod request_user_input;
+pub(crate) mod status_line_layout;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -111,7 +112,9 @@ pub(crate) use async_questions::QuestionSubmission;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
+#[cfg(test)]
 pub(crate) use status_line_style::status_line_from_segments;
+pub(crate) use status_line_style::status_line_with_notification_style;
 pub(crate) use voice_strip::VoiceStripPhase;
 pub(crate) use voice_strip::VoiceStripState;
 mod bottom_pane_view;
@@ -2308,6 +2311,12 @@ impl BottomPane {
             };
             flex2.push(/*flex*/ 0, composer);
             RenderableItem::Owned(Box::new(flex2))
+        }
+    }
+
+    pub(crate) fn set_status_line_rows(&mut self, rows: Vec<Line<'static>>) {
+        if self.composer.set_status_line_rows(rows) {
+            self.request_redraw();
         }
     }
 

@@ -1572,6 +1572,7 @@ impl App {
                 .set_workspace_roots(session.runtime_workspace_roots.clone());
         }
 
+        let has_presentation_timeline = session.presentation_timeline.is_some();
         let thread_id = session.thread_id;
         self.pending_server_profiles.remove(&thread_id);
         if self.primary_thread_id != Some(thread_id) {
@@ -1603,7 +1604,7 @@ impl App {
                 self.chat_widget.handle_thread_session(session);
             }
         }
-        let should_buffer_initial_replay = !turns.is_empty();
+        let should_buffer_initial_replay = !turns.is_empty() || has_presentation_timeline;
         let replayed_final_items = realtime_delivery::completed_agent_items_from_turns(&turns);
         let replayed_voice_texts = realtime_delivery::replayed_voice_texts_from_turns(&turns);
         let retained_assistant_captions =
@@ -1650,6 +1651,10 @@ impl App {
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
         self.chat_widget.submit_initial_user_message_if_pending();
+        if has_presentation_timeline {
+            self.app_event_tx
+                .send(AppEvent::ReconcilePresentations { thread_id });
+        }
         Ok(())
     }
 
@@ -1839,6 +1844,10 @@ impl App {
         mut snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let has_presentation_timeline = snapshot
+            .session
+            .as_ref()
+            .is_some_and(|session| session.presentation_timeline.is_some());
         let mut reasoning_replay = reasoning_replay::ReasoningReplay::new(&mut snapshot);
         let replayed_final_items = realtime_delivery::completed_agent_items(&snapshot);
         let replayed_voice_texts = realtime_delivery::replayed_voice_texts(&snapshot);
@@ -1935,10 +1944,8 @@ impl App {
                 preserve_in_flight_turn: true,
             },
         );
-        if !snapshot.turns.is_empty() {
-            self.chat_widget
-                .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
-        }
+        self.chat_widget
+            .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
         for (event, changes) in snapshot.events.into_iter().zip(request_changes) {
             reasoning_replay.before_event(&event, &mut self.chat_widget);
             match (event, changes) {
@@ -1973,6 +1980,10 @@ impl App {
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
         self.chat_widget.submit_initial_user_message_if_pending();
+        if has_presentation_timeline && let Some(thread_id) = self.chat_widget.thread_id() {
+            self.app_event_tx
+                .send(AppEvent::ReconcilePresentations { thread_id });
+        }
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
@@ -2058,15 +2069,7 @@ impl App {
     }
 
     pub(super) fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
-        let needs_refresh = matches!(
-            &event,
-            ThreadBufferedEvent::Notification(notification)
-                if matches!(
-                    notification.as_ref(),
-                    ServerNotification::TurnStarted(_)
-                        | ServerNotification::ThreadTokenUsageUpdated(_)
-                )
-        );
+        let needs_refresh = Self::thread_event_needs_status_refresh(&event);
         match event {
             ThreadBufferedEvent::Notification(notification) => {
                 self.cache_collab_receiver_threads_for_notification(notification.as_ref());
@@ -2108,6 +2111,7 @@ impl App {
     }
 
     pub(super) fn handle_thread_event_replay(&mut self, event: ThreadBufferedEvent) {
+        let needs_refresh = Self::thread_event_needs_status_refresh(&event);
         self.turn_tips.dismiss();
         match event {
             ThreadBufferedEvent::Notification(notification) => self
@@ -2132,6 +2136,21 @@ impl App {
                 self.handle_feedback_thread_event(event);
             }
         }
+        if needs_refresh {
+            self.refresh_status_line();
+        }
+    }
+
+    fn thread_event_needs_status_refresh(event: &ThreadBufferedEvent) -> bool {
+        matches!(
+            event,
+            ThreadBufferedEvent::Notification(notification)
+                if matches!(
+                    notification.as_ref(),
+                    ServerNotification::TurnStarted(_)
+                        | ServerNotification::ThreadTokenUsageUpdated(_)
+                )
+        )
     }
 
     /// Handles an event emitted by the currently active thread.

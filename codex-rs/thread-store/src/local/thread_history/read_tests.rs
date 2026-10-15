@@ -486,7 +486,8 @@ INSERT INTO thread_realtime_items (
                 ThreadTimelineEntry::Item { position, .. }
                 | ThreadTimelineEntry::Realtime { position, .. }
                 | ThreadTimelineEntry::TurnStarted { position, .. }
-                | ThreadTimelineEntry::TurnCompleted { position, .. } => *position,
+                | ThreadTimelineEntry::TurnCompleted { position, .. }
+                | ThreadTimelineEntry::Presentation { position, .. } => *position,
             })
             .collect::<Vec<_>>(),
         vec![30, 31, 40]
@@ -511,7 +512,8 @@ INSERT INTO thread_realtime_items (
                 ThreadTimelineEntry::Item { position, .. }
                 | ThreadTimelineEntry::Realtime { position, .. }
                 | ThreadTimelineEntry::TurnStarted { position, .. }
-                | ThreadTimelineEntry::TurnCompleted { position, .. } => *position,
+                | ThreadTimelineEntry::TurnCompleted { position, .. }
+                | ThreadTimelineEntry::Presentation { position, .. } => *position,
             })
             .collect::<Vec<_>>(),
         vec![12, 20, 21]

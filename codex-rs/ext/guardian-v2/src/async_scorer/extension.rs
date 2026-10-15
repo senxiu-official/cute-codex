@@ -67,7 +67,7 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                     .config
                     .config_layer_stack
                     .requirements()
-                    .constrain_guardian_policy(&mut policy, &model.slug);
+                    .constrain_guardian_policy_for_model_info(&mut policy, model);
             }
             let scoring_enabled = policy.scoring_enabled();
             let sampler_config = super::startup::sampler_config(

@@ -22,6 +22,7 @@ from .v2_all import EnvironmentConnectionNotification
 from .v2_all import ErrorNotification
 from .v2_all import ExternalAgentConfigImportCompletedNotification
 from .v2_all import ExternalAgentConfigImportProgressNotification
+from .v2_all import ExternalInputStatusChangedNotification
 from .v2_all import FileChangeOutputDeltaNotification
 from .v2_all import FileChangePatchUpdatedNotification
 from .v2_all import FsChangedNotification
@@ -43,6 +44,7 @@ from .v2_all import ModelReroutedNotification
 from .v2_all import ModelSafetyBufferingUpdatedNotification
 from .v2_all import ModelVerificationNotification
 from .v2_all import PlanDeltaNotification
+from .v2_all import PresentationAppendedNotification
 from .v2_all import ProcessExitedNotification
 from .v2_all import ProcessOutputDeltaNotification
 from .v2_all import ProjectChangedNotification
@@ -105,6 +107,7 @@ KnownNotificationPayload: TypeAlias = (
     | ErrorNotification
     | ExternalAgentConfigImportCompletedNotification
     | ExternalAgentConfigImportProgressNotification
+    | ExternalInputStatusChangedNotification
     | FileChangeOutputDeltaNotification
     | FileChangePatchUpdatedNotification
     | FsChangedNotification
@@ -126,6 +129,7 @@ KnownNotificationPayload: TypeAlias = (
     | ModelSafetyBufferingUpdatedNotification
     | ModelVerificationNotification
     | PlanDeltaNotification
+    | PresentationAppendedNotification
     | ProcessExitedNotification
     | ProcessOutputDeltaNotification
     | ProjectChangedNotification
@@ -227,9 +231,11 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "thread/deleted": ThreadDeletedNotification,
     "thread/environment/connected": EnvironmentConnectionNotification,
     "thread/environment/disconnected": EnvironmentConnectionNotification,
+    "thread/externalInput/statusChanged": ExternalInputStatusChangedNotification,
     "thread/goal/cleared": ThreadGoalClearedNotification,
     "thread/goal/updated": ThreadGoalUpdatedNotification,
     "thread/name/updated": ThreadNameUpdatedNotification,
+    "thread/presentation/appended": PresentationAppendedNotification,
     "thread/project/updated": ThreadProjectUpdatedNotification,
     "thread/queue/changed": ThreadQueueChangedNotification,
     "thread/realtime/closed": ThreadRealtimeClosedNotification,

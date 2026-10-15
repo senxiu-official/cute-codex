@@ -11,6 +11,8 @@ use codex_protocol::mcp::is_node_repl_backed_server;
 #[path = "mcp_result.rs"]
 mod result;
 
+#[path = "mcp_compact.rs"]
+mod compact;
 #[path = "mcp_preview.rs"]
 mod preview;
 
@@ -50,6 +52,8 @@ fn mcp_auth_status_label(status: McpAuthStatus) -> &'static str {
 #[derive(Debug)]
 pub(crate) struct McpToolCallCell {
     call_id: String,
+    job_label: Option<String>,
+    compact_result_consistent: bool,
     invocation: McpInvocation,
     start_time: Instant,
     duration: Option<Duration>,
@@ -65,6 +69,10 @@ pub(crate) struct McpInvocation {
 }
 
 impl McpInvocation {
+    pub(crate) fn supports_compact_presentation(&self) -> bool {
+        super::cutex_mcp_display::title(self).is_some()
+    }
+
     pub(crate) fn is_computer_activity(&self) -> bool {
         self.server == "cua_repl"
     }
@@ -92,6 +100,8 @@ impl McpToolCallCell {
     ) -> Self {
         Self {
             call_id,
+            job_label: None,
+            compact_result_consistent: true,
             invocation,
             start_time: Instant::now(),
             duration: None,
@@ -104,11 +114,33 @@ impl McpToolCallCell {
         &self.call_id
     }
 
+    pub(super) fn supports_compact_presentation(&self) -> bool {
+        self.invocation.supports_compact_presentation()
+    }
+
+    pub(crate) fn has_result(&self) -> bool {
+        self.result.is_some()
+    }
+
+    pub(crate) fn set_job_label(&mut self, label: String) {
+        self.job_label = Some(label);
+    }
+
     pub(crate) fn complete(
         &mut self,
         duration: Duration,
         result: Result<codex_protocol::mcp::CallToolResult, String>,
     ) {
+        self.compact_result_consistent = result.as_ref().ok().is_none_or(|result| {
+            result.structured_content.as_ref().is_none_or(|structured| {
+                result.content.len() == 1
+                    && result.content[0]["text"]
+                        .as_str()
+                        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                        .as_ref()
+                        == Some(structured)
+            })
+        });
         let result = result.map(|result| McpToolResult::new(result, self.result_kind()));
         self.duration = Some(duration);
         self.result = Some(result);
@@ -147,6 +179,11 @@ impl McpToolCallCell {
         width: u16,
         mode: McpToolCallRenderMode,
     ) -> Vec<HyperlinkLine> {
+        if mode == McpToolCallRenderMode::Display
+            && let Some(lines) = compact::render(self, width)
+        {
+            return lines.into_iter().map(HyperlinkLine::from).collect();
+        }
         let mut lines: Vec<HyperlinkLine> = Vec::new();
         let status = self.success();
         let node_repl = self.result_kind() == McpResultKind::NodeRepl;
@@ -361,6 +398,9 @@ impl HistoryCell for McpToolCallCell {
     }
 
     fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        if let Some(lines) = compact::render(self, width) {
+            return lines.into_iter().map(HyperlinkLine::from).collect();
+        }
         self.compact_mcp_lines(width)
     }
 

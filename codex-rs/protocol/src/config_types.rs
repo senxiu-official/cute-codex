@@ -368,6 +368,24 @@ impl From<MultiAgentModeWire> for MultiAgentMode {
     }
 }
 
+/// Compatibility lowering applied to function / MCP tool parameter schemas right
+/// before they are serialized into a model request (config `tool_schema_compat`).
+///
+/// `off` (default) sends the schemas unchanged. `strict` rewrites every `enum`
+/// so it sits next to one `type` that all of its values share (mixed or
+/// mismatched values become strings, `null` leaves the enum and a `[T, "null"]`
+/// type), for providers whose function declarations reject anything else.
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, Default,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ToolSchemaCompat {
+    #[default]
+    Off,
+    Strict,
+}
+
 #[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]

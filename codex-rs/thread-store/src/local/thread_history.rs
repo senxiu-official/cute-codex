@@ -9,6 +9,8 @@ use super::LocalThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
+mod legacy_timeline;
+pub(super) use legacy_timeline::CachedTimeline;
 mod read;
 mod realtime;
 mod search;
@@ -32,6 +34,7 @@ pub(super) struct ProjectedRolloutLine {
     pub fallback_created_at_ms: Option<i64>,
     pub changes: ThreadHistoryChangeSet,
     pub realtime_item: Option<RealtimeItem>,
+    pub presentation: Option<codex_protocol::presentation::PresentationAppended>,
 }
 
 /// One ordered update to apply while advancing a rollout projection checkpoint.
@@ -46,7 +49,11 @@ pub(super) enum RolloutProjectionStep {
     },
 }
 
+// The existing external_input_version column is the derived history projection
+// revision: 4 drops retired K InterAgentMessage display rows. This is unrelated
+// to the public ExternalInput envelope version. Older indexes rebuild from JSONL.
 pub(super) struct RolloutProjectionState {
+    pub external_input_version: i64,
     pub next_byte_offset: u64,
     pub next_ordinal: u64,
 }
@@ -67,9 +74,9 @@ pub(super) async fn projection_state(
     }
 
     let pool = store.thread_history_db().await?;
-    let state = sqlx::query_as::<_, (i64, i64)>(
+    let state = sqlx::query_as::<_, (i64, i64, i64)>(
         r#"
-SELECT next_rollout_byte_offset, next_rollout_ordinal
+SELECT next_rollout_byte_offset, next_rollout_ordinal, external_input_version
 FROM thread_history_projection_state
 WHERE thread_id = ?
         "#,
@@ -79,8 +86,14 @@ WHERE thread_id = ?
     .await
     .map_err(thread_history_error)?;
     state
-        .map(|(next_byte_offset, next_ordinal)| {
+        .map(|(next_byte_offset, next_ordinal, external_input_version)| {
+            if !(0..=4).contains(&external_input_version) {
+                return Err(thread_history_error(
+                    "unsupported external input projection version",
+                ));
+            }
             Ok(RolloutProjectionState {
+                external_input_version,
                 next_byte_offset: u64::try_from(next_byte_offset).map_err(|_| {
                     ThreadStoreError::Internal {
                         message: format!(
@@ -117,9 +130,9 @@ pub(super) async fn apply_projection(
         .await
         .map_err(thread_history_error)?;
     let thread_id = thread_id.to_string();
-    let projection_state = sqlx::query_as::<_, (i64, i64)>(
+    let projection_state = sqlx::query_as::<_, (i64, i64, i64)>(
         r#"
-SELECT next_rollout_byte_offset, next_rollout_ordinal
+SELECT next_rollout_byte_offset, next_rollout_ordinal, external_input_version
 FROM thread_history_projection_state
 WHERE thread_id = ?
         "#,
@@ -128,13 +141,36 @@ WHERE thread_id = ?
     .fetch_optional(&mut *transaction)
     .await
     .map_err(thread_history_error)?;
-    let (expected_offset, mut next_ordinal) =
-        projection_state.unwrap_or((0, sqlite_integer(initial_ordinal, "rollout ordinal")?));
+    let (expected_offset, mut next_ordinal) = match projection_state {
+        Some((offset, ordinal, 4)) => (offset, ordinal),
+        Some((_, _, 0..=3)) | None => (0, sqlite_integer(initial_ordinal, "rollout ordinal")?),
+        _ => {
+            return Err(thread_history_error(
+                "unsupported external input projection version",
+            ));
+        }
+    };
     let start_offset = sqlite_integer(start_offset, "rollout byte offset")?;
     if expected_offset != start_offset {
         return Err(ThreadStoreError::Internal {
             message: format!("thread history projection for {thread_id} is behind durable rollout"),
         });
+    }
+
+    if projection_state.is_some_and(|(_, _, version)| version < 4) {
+        // Item IDs and reasoning partitions can change when historical events become
+        // visible or are retired. Rebuild this thread's derived rows in
+        // the same transaction as its checkpoint; never retain stale item positions.
+        for statement in [
+            "DELETE FROM thread_items WHERE thread_id = ?",
+            "DELETE FROM thread_turns WHERE thread_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(thread_id.as_str())
+                .execute(&mut *transaction)
+                .await
+                .map_err(thread_history_error)?;
+        }
     }
 
     for projection in projections {
@@ -158,6 +194,18 @@ WHERE thread_id = ?
                     projection.changes,
                 )
                 .await?;
+                if let Some(item) = projection.presentation {
+                    item.validate().map_err(thread_history_error)?;
+                    let json = serde_json::to_string(&item).map_err(thread_history_error)?;
+                    let previous = sqlx::query_scalar::<_, String>("SELECT item_json FROM thread_presentations WHERE thread_id = ? AND item_id = ?")
+                        .bind(&thread_id).bind(&item.presentation.id).fetch_optional(&mut *transaction).await.map_err(thread_history_error)?;
+                    if previous.as_ref().is_some_and(|old| old != &json) {
+                        return Err(thread_history_error("conflicting presentation index"));
+                    }
+                    sqlx::query("INSERT INTO thread_presentations(thread_id, item_id, rollout_ordinal, item_json) VALUES (?, ?, ?, ?) ON CONFLICT(thread_id, item_id) DO NOTHING")
+                        .bind(&thread_id).bind(&item.presentation.id).bind(ordinal).bind(json)
+                        .execute(&mut *transaction).await.map_err(thread_history_error)?;
+                }
                 if let Some(item) = projection.realtime_item {
                     let item_json = serde_json::to_string(&item).map_err(thread_history_error)?;
                     sqlx::query(
@@ -225,11 +273,13 @@ ON CONFLICT(thread_id, item_id) DO NOTHING
 INSERT INTO thread_history_projection_state (
     thread_id,
     next_rollout_byte_offset,
-    next_rollout_ordinal
-) VALUES (?, ?, ?)
+    next_rollout_ordinal,
+    external_input_version
+) VALUES (?, ?, ?, 4)
 ON CONFLICT(thread_id) DO UPDATE SET
     next_rollout_byte_offset = excluded.next_rollout_byte_offset,
-    next_rollout_ordinal = excluded.next_rollout_ordinal
+    next_rollout_ordinal = excluded.next_rollout_ordinal,
+    external_input_version = 4
         "#,
     )
     .bind(thread_id.as_str())
@@ -259,6 +309,11 @@ pub(super) async fn delete_thread(
         .await
         .map_err(thread_history_delete_error)?;
     let thread_id = thread_id.to_string();
+    sqlx::query("DELETE FROM thread_presentations WHERE thread_id = ?")
+        .bind(thread_id.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(thread_history_delete_error)?;
     sqlx::query("DELETE FROM thread_items WHERE thread_id = ?")
         .bind(thread_id.as_str())
         .execute(&mut *transaction)
@@ -438,6 +493,26 @@ WHERE thread_id = ?
                 })?;
         let item_id = item.item.id().to_string();
         let item_json = serde_json::to_string(&item.item).map_err(thread_history_error)?;
+        if matches!(&item.item, ThreadItem::FunctionCallOutput {name,namespace,..} if name == "external_event" && namespace.as_deref() == Some("external"))
+        {
+            let existing = sqlx::query_as::<_, (String, String)>(
+                "SELECT turn_id, item_json FROM thread_items WHERE thread_id = ? AND item_id = ?",
+            )
+            .bind(thread_id)
+            .bind(&item_id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(thread_history_error)?;
+            if let Some((turn_id, previous)) = existing {
+                let previous: ThreadItem =
+                    serde_json::from_str(&previous).map_err(thread_history_error)?;
+                if turn_id != item.turn_id || previous != item.item {
+                    return Err(thread_history_error(
+                        "conflicting external input display identity",
+                    ));
+                }
+            }
+        }
         // Completed items are immutable: local producers emit ItemCompleted exactly once per
         // item. Tolerate an unexpected duplicate defensively so it cannot poison materialization,
         // preserving the original creation ordinal and timestamp while updating its snapshot.
@@ -520,7 +595,7 @@ WHERE thread_id = ?
                 .map_err(thread_history_error)?;
             }
             ThreadItem::AgentMessage {
-                phase: Some(MessagePhase::Commentary) | None,
+                phase: Some(MessagePhase::Commentary | MessagePhase::PartialAnswer) | None,
                 ..
             }
             | ThreadItem::HookPrompt { .. }

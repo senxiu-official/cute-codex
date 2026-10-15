@@ -88,6 +88,16 @@ impl GuardianPolicyLoader {
 }
 
 impl ConfigRequirements {
+    /// Local aliases retain all administrator restrictions on their upstream model.
+    pub fn constrain_guardian_policy_for_model_info(
+        &self,
+        policy: &mut GuardianModelPolicy,
+        model: &ModelInfo,
+    ) {
+        self.constrain_guardian_policy(policy, &model.slug);
+        self.constrain_guardian_policy(policy, model.request_model());
+    }
+
     /// Applies live administrator requirements to an already resolved model policy.
     pub fn constrain_guardian_policy(&self, policy: &mut GuardianModelPolicy, model: &str) {
         if self.auto_review_required_for_model(model) {

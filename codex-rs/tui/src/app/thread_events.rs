@@ -664,6 +664,7 @@ mod tests {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
             forked_from_id: None,
+            presentation_timeline: None,
             fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),

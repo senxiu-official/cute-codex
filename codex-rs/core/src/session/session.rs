@@ -58,6 +58,8 @@ type McpToolApprovalMetadataMap =
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
+    pub(crate) presentation: Mutex<()>,
+    pub(crate) external_input: Mutex<Option<crate::external_input::Runtime>>,
     pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
@@ -1634,6 +1636,7 @@ impl Session {
                     | RolloutItem::InterAgentCommunicationMetadata { .. }
                     | RolloutItem::TurnContext(_)
                     | RolloutItem::WorldState(_)
+                    | RolloutItem::ExternalInput(_)
                     | RolloutItem::RealtimeItem(_)
                     | RolloutItem::TokenUsageRecord(_)
                     | RolloutItem::RetainedContext(_)
@@ -1751,6 +1754,7 @@ impl Session {
                     extensions.model_request_contributors().to_vec(),
                 )
                 .with_executed_tool_calls(executed_tool_calls.clone())
+                .with_tool_schema_compat(config.tool_schema_compat)
                 .with_restored_history(matches!(
                     &initial_history,
                     InitialHistory::Resumed(_) | InitialHistory::Forked(_)
@@ -1781,6 +1785,8 @@ impl Session {
                 tx_event: tx_event.clone(),
                 agent_status,
                 state: Mutex::new(state),
+                external_input: Mutex::new(None),
+                presentation: Mutex::new(()),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
                 code_mode_message_tasks: CodeModeMessageTasks::default(),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),

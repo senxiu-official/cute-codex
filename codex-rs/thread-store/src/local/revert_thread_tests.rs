@@ -348,3 +348,152 @@ fn compress_rollout(path: &std::path::Path) {
     std::fs::write(path.with_extension("jsonl.zst"), compressed).expect("write compressed rollout");
     std::fs::remove_file(path).expect("remove plain rollout");
 }
+
+#[tokio::test]
+async fn presentation_rebuild_revert_and_corrupt_source_are_explicit() {
+    use codex_app_server_protocol::ThreadTimelineEntry;
+    use codex_protocol::external_input::Source;
+    use codex_protocol::external_input::SourceKind;
+    use codex_protocol::presentation::Presentation;
+    use codex_protocol::presentation::PresentationAppended;
+    use codex_protocol::presentation::PresentationFormat;
+    let home = TempDir::new().unwrap();
+    let config = test_config(home.path());
+    let db = codex_state::StateRuntime::init(
+        config.sqlite.clone(),
+        config.default_model_provider_id.clone(),
+    )
+    .await
+    .unwrap();
+    let store = LocalThreadStore::new(config, Some(db.clone()));
+    let thread_id = ThreadId::new();
+    create_paginated_thread(&store, thread_id).await;
+    let mut record = PresentationAppended {
+        version: 1,
+        owner_id: "owner".into(),
+        origin_thread_id: thread_id.to_string(),
+        presentation: Presentation {
+            id: "display".into(),
+            source: Source {
+                kind: SourceKind::Service,
+                id: "source".into(),
+            },
+            title: "Fact".into(),
+            body: "Still true after model rollback".into(),
+            format: PresentationFormat::PlainText,
+            references: vec![],
+        },
+        semantic_sha256: String::new(),
+        receipt_id: String::new(),
+    };
+    record.semantic_sha256 = record.semantic_digest();
+    record.receipt_id = record.receipt_digest();
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("one"),
+                turn_completed("one"),
+                turn_started("two"),
+                RolloutItem::EventMsg(EventMsg::PresentationAppended(record.clone())),
+                turn_completed("two"),
+            ],
+        })
+        .await
+        .unwrap();
+    let original = store.live_rollout_path(thread_id).await.unwrap();
+    store.shutdown_thread(thread_id).await.unwrap();
+    codex_rollout::state_db::reconcile_rollout(
+        Some(db.as_ref()),
+        original.as_path(),
+        "test-provider",
+        None,
+        &[],
+        Some(false),
+        None,
+    )
+    .await;
+    let source_bytes = std::fs::read(&original).unwrap();
+    let params = || crate::ListTimelineParams {
+        thread_id,
+        cursor: None,
+        page_size: 100,
+    };
+    store.list_timeline(params()).await.unwrap();
+    let pool = store.thread_history_db().await.unwrap();
+    sqlx::query("DELETE FROM thread_presentations WHERE thread_id = ?")
+        .bind(thread_id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE thread_history_projection_state SET external_input_version = 1 WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    let page = store.list_timeline(params()).await.unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .filter_map(|entry| match entry {
+                ThreadTimelineEntry::Presentation { item, .. } => Some(item.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![record.clone()]
+    );
+    assert_eq!(std::fs::read(&original).unwrap(), source_bytes);
+    store
+        .revert_thread(RevertThreadParams {
+            thread_id,
+            before_turn_id: "two".into(),
+            multi_agent_version: None,
+        })
+        .await
+        .unwrap();
+    let page = store.list_timeline(params()).await.unwrap();
+    assert_eq!(
+        page.items
+            .iter()
+            .filter_map(|entry| match entry {
+                ThreadTimelineEntry::Presentation { item, .. } => Some(item.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![record]
+    );
+    assert_eq!(turn_ids(&store, thread_id).await, vec!["one"]);
+    assert_eq!(std::fs::read(&original).unwrap(), source_bytes);
+    let path = db
+        .get_thread(thread_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .rollout_path;
+    // A warm page must still notice an in-place edit that keeps the file length.
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let corrupted = contents.replace("Fact", "FAct");
+    assert_ne!(contents, corrupted);
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::fs::write(&path, corrupted).unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(modified + std::time::Duration::from_secs(1))
+        .unwrap();
+    assert!(store.list_timeline(params()).await.is_err());
+    std::fs::write(&path, contents).unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(modified + std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(
+        store.list_timeline(params()).await.unwrap().items,
+        page.items
+    );
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(b"{bad source\n").unwrap();
+    assert!(store.list_timeline(params()).await.is_err());
+}

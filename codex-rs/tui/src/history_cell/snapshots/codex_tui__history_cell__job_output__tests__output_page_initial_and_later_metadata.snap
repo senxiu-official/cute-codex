@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell/job_output_tests.rs
+expression: "cases.iter().map(|value|\nparsed(value).unwrap().lines(80)[0].to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+  stdout · 39 B
+  stdout · 3 B · bytes 7–9
+  stdout · 0 B · empty page
+  stdout · 0 B · offset 7 · empty page

@@ -133,7 +133,29 @@ pub(crate) fn thread_items_to_transcript_cells(
     });
     let mut cells: TranscriptCells = Vec::new();
     let mut pending = None;
+    let mut external_ids = std::collections::HashSet::new();
     for item in items {
+        if let ThreadItem::FunctionCallOutput {
+            id,
+            name,
+            namespace,
+            output,
+            external_input_view,
+        } = &item
+            && let Some(cell) = crate::history_cell::ExternalInputHistoryCell::parse(
+                id,
+                name,
+                namespace.as_deref(),
+                output,
+                external_input_view.as_ref(),
+            )
+        {
+            PendingActivity::flush(&mut pending, &mut cells);
+            if external_ids.insert(id.clone()) {
+                cells.push(Arc::new(cell));
+            }
+            continue;
+        }
         if matches!(item, ThreadItem::Reasoning { .. })
             && let Some(group) = &mut pending
         {

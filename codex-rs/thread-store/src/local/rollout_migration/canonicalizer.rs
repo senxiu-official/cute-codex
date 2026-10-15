@@ -293,6 +293,7 @@ impl LegacyRolloutCanonicalizer {
             item @ (RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::TurnContext(_)
             | RolloutItem::TokenUsageRecord(_)
+            | RolloutItem::ExternalInput(_)
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::RetainedContext(_)
             | RolloutItem::SecurityRiskScore(_)

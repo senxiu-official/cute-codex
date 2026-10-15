@@ -2387,6 +2387,8 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
+        // Assertions concern command output, not host login-profile side effects.
+        config.permissions.allow_login_shell = false;
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config
             .set_legacy_sandbox_policy(sandbox_policy_for_config)

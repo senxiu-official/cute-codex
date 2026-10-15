@@ -855,7 +855,9 @@ fn requested_model_is_available(
 fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
     let mut best: Option<ModelInfo> = None;
     for candidate in candidates {
-        if !model.starts_with(&candidate.slug) {
+        if (candidate.request_model.is_some() && model != candidate.slug)
+            || !model.starts_with(&candidate.slug)
+        {
             continue;
         }
         let is_better_match = if let Some(current) = best.as_ref() {
@@ -887,6 +889,7 @@ fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Opt
         return None;
     }
     find_model_by_longest_prefix(suffix, candidates)
+        .filter(|candidate| candidate.request_model.is_none())
 }
 
 pub(crate) fn construct_model_info_from_candidates(

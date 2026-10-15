@@ -1501,13 +1501,13 @@ async fn maybe_request_mcp_tool_approval(
         Some(turn_state) => turn_state.lock().await.strict_auto_review_enabled(),
         None => false,
     };
-    let approvals_reviewer = connectors::mcp_approvals_reviewer_from_layers(
+    let approvals_reviewer = connectors::mcp_approvals_reviewer_for_model(
         &config.config_layer_stack,
         step_context
             .settings
             .mcp_approvals_reviewer_override
             .unwrap_or(config.approvals_reviewer),
-        Some(turn_context.model_info().slug.as_str()),
+        turn_context.model_info(),
         &invocation.server,
         metadata.connector_id.as_deref(),
         metadata.link_id.as_deref(),

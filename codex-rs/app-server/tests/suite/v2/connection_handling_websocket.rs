@@ -449,9 +449,12 @@ async fn websocket_transport_rejects_unauthenticated_non_loopback_startup() -> R
     Ok(())
 }
 
+#[test_case::test_case(true ; "default unloads idle disconnected threads")]
+#[test_case::test_case(false ; "persistent host retains disconnected threads")]
 #[tokio::test]
-async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_timeout() -> Result<()>
-{
+async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_timeout(
+    unload_enabled: bool,
+) -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
@@ -459,7 +462,12 @@ async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_tim
     let (mut process, bind_addr) = spawn_websocket_server_with_args(
         codex_home.path(),
         "ws://127.0.0.1:0",
-        &["-c".to_string(), "thread_unload_delay_secs=2".to_string()],
+        &[
+            "-c".to_string(),
+            "thread_unload_delay_secs=2".to_string(),
+            "-c".to_string(),
+            format!("thread_unload_enabled={unload_enabled}"),
+        ],
     )
     .await?;
 
@@ -478,7 +486,12 @@ async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_tim
     drop(ws1);
 
     wait_for_loaded_threads(&mut ws2, /*first_id*/ 5, &[thread_id.as_str()]).await?;
-    wait_for_loaded_threads(&mut ws2, /*first_id*/ 100, &[]).await?;
+    if unload_enabled {
+        wait_for_loaded_threads(&mut ws2, /*first_id*/ 100, &[]).await?;
+    } else {
+        sleep(Duration::from_millis(2500)).await;
+        assert_loaded_threads(&mut ws2, /*id*/ 100, &[thread_id.as_str()]).await?;
+    }
 
     process
         .kill()

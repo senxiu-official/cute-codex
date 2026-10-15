@@ -309,6 +309,7 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::Compacted(_)
+        | RolloutItem::ExternalInput(_)
         | RolloutItem::RealtimeItem(_)
         | RolloutItem::RetainedContext(_)
         | RolloutItem::SecurityRiskScore(_)

@@ -42,6 +42,7 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::config_types::ToolSchemaCompat;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::McpAttribution;
@@ -104,6 +105,33 @@ const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     test_model_client_with_thread_id(ThreadId::new(), session_source)
+}
+
+fn test_model_client_with_provider(
+    provider: ModelProviderInfo,
+    session_source: SessionSource,
+) -> ModelClient {
+    ModelClient::new(
+        /*auth_manager*/ None,
+        AgentIdentityAuthPolicy::JwtOnly,
+        ThreadId::new(),
+        provider,
+        session_source,
+        "test_originator".to_string(),
+        /*model_verbosity*/ None,
+        /*content_item_kinds_enabled*/ true,
+        /*reasoning_effort_override_enabled*/ false,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        /*beta_features_header*/ None,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*attestation_provider*/ None,
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        codex_model_provider::WorkspaceRoutingContext::new(
+            "https://chatgpt.com/backend-api".into(),
+        ),
+        Vec::new(),
+    )
 }
 
 fn test_model_client_with_thread_id(
@@ -1497,6 +1525,43 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 }
 
 #[tokio::test]
+async fn model_variant_memory_summary_sends_upstream_model() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/memories/trace_summarize"))
+        .respond_with(ResponseTemplate::new(/*status*/ 200).set_body_json(json!({"output": []})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider =
+        create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
+    let client = test_model_client_with_provider(provider, SessionSource::Cli);
+    let mut model = test_model_info();
+    model.request_model = Some(model.slug.clone());
+    model.slug = "Local [285K]".to_string();
+    client
+        .summarize_memories(
+            vec![codex_api::RawMemory {
+                id: "trace".to_string(),
+                metadata: codex_api::RawMemoryMetadata {
+                    source_path: "trace.json".to_string(),
+                },
+                items: Vec::new(),
+            }],
+            &model,
+            /*effort*/ None,
+            &test_session_telemetry(),
+        )
+        .await
+        .expect("memory summary");
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[0].body).unwrap()["model"],
+        "gpt-test"
+    );
+}
+
+#[tokio::test]
 async fn summarize_memories_returns_empty_for_empty_input() {
     let client = test_model_client(SessionSource::Cli);
     let model_info = test_model_info();
@@ -2057,6 +2122,8 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 0);
 }
 
+#[path = "client_item_id_tests.rs"]
+mod item_id_tests;
 #[tokio::test]
 async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow::Result<()> {
     struct ReplaceOutput;
@@ -2121,5 +2188,129 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
     let recorded: serde_json::Value =
         serde_json::from_slice(&std::fs::read(temp.path().join(&payload.path))?)?;
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
+    Ok(())
+}
+
+/// `tool_schema_compat = "strict"` lowers enums in the serialized request
+/// tools; the default `off` sends the prompt's specs byte-for-byte.
+#[test]
+fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() -> anyhow::Result<()>
+{
+    let mcp_schema = json!({
+        "type": "object",
+        "properties": {
+            "mode": {"type": ["string", "null"], "enum": ["fast", "slow", null]},
+            "level": {"enum": [1, 2, 3]},
+            "flag": {"const": true}
+        },
+        "required": ["mode"],
+        "additionalProperties": false
+    });
+    let tool = codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
+        name: "mcp__srv__tool".to_string(),
+        description: "An MCP tool.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: codex_tools::parse_tool_input_schema(&mcp_schema)?,
+        output_schema: None,
+    });
+    // A tool `tool_search` loaded earlier travels in a history item.
+    let loaded = serde_json::to_value(&tool)?;
+    let prompt = Prompt {
+        tools: vec![tool].into(),
+        input: vec![
+            ResponseItem::ToolSearchCall {
+                id: None,
+                call_id: Some("call-search".to_string()),
+                status: Some("completed".to_string()),
+                execution: "client".to_string(),
+                arguments: json!({"query": "srv"}),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::ToolSearchOutput {
+                id: None,
+                call_id: Some("call-search".to_string()),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: vec![loaded.clone()],
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ],
+        ..Prompt::default()
+    };
+    let request_tools = |compat: ToolSchemaCompat| -> anyhow::Result<serde_json::Value> {
+        let client = test_model_client(SessionSource::Cli).with_tool_schema_compat(compat);
+        let request = client.build_responses_request(
+            &prompt,
+            &test_model_info(),
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &test_responses_metadata_for_client(
+                &client,
+                /*turn_id*/ None,
+                format!("{}:0", client.state.thread_id),
+                /*parent_thread_id*/ None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            /*include_internal*/ true,
+        )?;
+        let request = serde_json::to_value(&request)?;
+        let history_tools = request["input"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item["type"] == "tool_search_output")
+            })
+            .map(|item| item["tools"].clone())
+            .unwrap_or_default();
+        Ok(json!({"tools": request["tools"], "history": history_tools}))
+    };
+
+    let off = request_tools(ToolSchemaCompat::Off)?;
+    assert_eq!(off["history"], json!([loaded]));
+    let off = off["tools"].clone();
+    assert_eq!(
+        off,
+        serde_json::to_value(codex_tools::create_tools_json_for_responses_api(
+            &prompt.tools
+        )?)?
+    );
+    assert_eq!(
+        codex_tools::strict_schema_violations(&off[0]["parameters"], "off").len(),
+        3,
+        "{off}"
+    );
+
+    let strict = request_tools(ToolSchemaCompat::Strict)?;
+    assert_eq!(
+        strict["history"][0]["parameters"],
+        strict["tools"][0]["parameters"]
+    );
+    let strict = strict["tools"].clone();
+    let properties = &strict[0]["parameters"]["properties"];
+    assert_eq!(
+        properties["mode"],
+        json!({"type": "string", "enum": ["fast", "slow"]})
+    );
+    assert_eq!(
+        properties["level"],
+        json!({"type": "integer", "enum": [1, 2, 3]})
+    );
+    assert_eq!(
+        properties["flag"],
+        json!({"type": "boolean", "enum": [true]})
+    );
+    assert_eq!(
+        codex_tools::strict_schema_violations(&strict[0]["parameters"], "strict"),
+        Vec::<String>::new()
+    );
+    // Everything but the lowered enums is unchanged.
+    assert_eq!(strict[0]["name"], off[0]["name"]);
+    assert_eq!(
+        strict[0]["parameters"]["required"],
+        off[0]["parameters"]["required"]
+    );
     Ok(())
 }

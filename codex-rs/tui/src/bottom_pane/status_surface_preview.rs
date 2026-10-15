@@ -3,15 +3,26 @@ use std::collections::BTreeMap;
 use codex_protocol::ThreadId;
 use ratatui::text::Line;
 
-use super::status_line_from_segments;
 use super::status_line_setup::StatusLineItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum StatusSurfacePreviewItem {
+    CustomProfile,
+    CustomBonVoyage,
+    Notification,
     AppName,
     ProjectName,
     ProjectRoot,
     CurrentDir,
+    CutexWorkdir,
+    CutexAgentName,
+    CutexContextRemaining,
+    CutexFableLimitBar,
+    CutexSimpleFiveHourLimit,
+    CutexAlignedProfile,
+    CutexFableLimit,
+    CutexCustomizedLimit,
+    CutexCustomizedLimitBar,
     Hostname,
     Status,
     ThreadName,
@@ -25,7 +36,13 @@ pub(crate) enum StatusSurfacePreviewItem {
     ContextUsed,
     FiveHourLimit,
     WeeklyLimit,
+    CutexFiveHourLimit,
+    CutexWeeklyLimit,
+    CutexSimpleWeeklyLimit,
+    CutexNewline,
+    CutexSpacing,
     CodexVersion,
+    CutexVersion,
     ContextWindowSize,
     UsedTokens,
     TotalInputTokens,
@@ -45,10 +62,26 @@ pub(crate) enum StatusSurfacePreviewItem {
 impl StatusSurfacePreviewItem {
     fn placeholder(self) -> &'static str {
         match self {
+            Self::CustomProfile => "[cutex_profile unavailable]",
+            Self::CustomBonVoyage => "[cutex_welcome unavailable]",
+            Self::Notification => "OFF",
+            Self::CutexNewline | Self::CutexSpacing => "",
+            Self::CutexSimpleWeeklyLimit => "W — —%",
+            Self::CutexFiveHourLimit => "5[          ]—% —",
+            Self::CutexWeeklyLimit => "W[          ]—% —",
             StatusSurfacePreviewItem::AppName => "codex",
             StatusSurfacePreviewItem::ProjectName => "my-project",
             StatusSurfacePreviewItem::ProjectRoot => "my-project",
             StatusSurfacePreviewItem::CurrentDir => "~/my-project/subdir",
+            Self::CutexSimpleFiveHourLimit => "5 3h20m 98%",
+            Self::CutexFableLimitBar => "F[███████   ]70% 1d03h",
+            Self::CutexContextRemaining => "C 72%",
+            Self::CutexAgentName => "IF director",
+            Self::CutexWorkdir => "$DEV/my-project",
+            Self::CutexAlignedProfile => "  profile   ",
+            Self::CutexCustomizedLimit => "Q 1d03h 75%",
+            Self::CutexCustomizedLimitBar => "Q[███████▌  ]75% 1d03h",
+            Self::CutexFableLimit => "F 1d03h 16%",
             StatusSurfacePreviewItem::Hostname => "my-host",
             StatusSurfacePreviewItem::Status => "Working",
             StatusSurfacePreviewItem::ThreadName => "thread name",
@@ -60,9 +93,10 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::ApprovalMode => "on-request",
             StatusSurfacePreviewItem::ContextRemaining => "Context 0% left",
             StatusSurfacePreviewItem::ContextUsed => "Context 0% used",
-            StatusSurfacePreviewItem::FiveHourLimit => "primary 0%",
-            StatusSurfacePreviewItem::WeeklyLimit => "secondary 0%",
+            StatusSurfacePreviewItem::FiveHourLimit => "5h N/A",
+            StatusSurfacePreviewItem::WeeklyLimit => "weekly N/A",
             StatusSurfacePreviewItem::CodexVersion => "0.0.0",
+            StatusSurfacePreviewItem::CutexVersion => "0.0.0 (N: r1)",
             StatusSurfacePreviewItem::ContextWindowSize => "0 window",
             StatusSurfacePreviewItem::UsedTokens => "0 used",
             StatusSurfacePreviewItem::TotalInputTokens => "0 in",
@@ -82,10 +116,22 @@ impl StatusSurfacePreviewItem {
 
     pub(crate) fn iter() -> impl Iterator<Item = Self> {
         [
+            Self::CustomProfile,
+            Self::CustomBonVoyage,
+            Self::Notification,
             Self::AppName,
             Self::ProjectName,
             Self::ProjectRoot,
             Self::CurrentDir,
+            Self::CutexWorkdir,
+            Self::CutexAgentName,
+            Self::CutexContextRemaining,
+            Self::CutexFableLimitBar,
+            Self::CutexSimpleFiveHourLimit,
+            Self::CutexAlignedProfile,
+            Self::CutexFableLimit,
+            Self::CutexCustomizedLimit,
+            Self::CutexCustomizedLimitBar,
             Self::Hostname,
             Self::Status,
             Self::ThreadName,
@@ -99,7 +145,11 @@ impl StatusSurfacePreviewItem {
             Self::ContextUsed,
             Self::FiveHourLimit,
             Self::WeeklyLimit,
+            Self::CutexFiveHourLimit,
+            Self::CutexWeeklyLimit,
+            Self::CutexSimpleWeeklyLimit,
             Self::CodexVersion,
+            Self::CutexVersion,
             Self::ContextWindowSize,
             Self::UsedTokens,
             Self::TotalInputTokens,
@@ -127,6 +177,7 @@ struct PreviewValue {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StatusSurfacePreviewData {
+    pub(crate) notification_style: Option<ratatui::style::Style>,
     pub(crate) thread_id: Option<ThreadId>,
     values: BTreeMap<StatusSurfacePreviewItem, PreviewValue>,
 }
@@ -136,6 +187,7 @@ impl Default for StatusSurfacePreviewData {
         let mut data = Self {
             thread_id: None,
             values: BTreeMap::new(),
+            notification_style: None,
         };
         for item in StatusSurfacePreviewItem::iter() {
             data.set_placeholder(item, item.placeholder());
@@ -233,6 +285,20 @@ impl StatusSurfacePreviewData {
             .map(|value| value.text.as_str())
     }
 
+    pub(crate) fn status_lines_for_items<I>(
+        &self,
+        items: I,
+        use_theme_colors: bool,
+    ) -> Vec<Line<'static>>
+    where
+        I: IntoIterator<Item = StatusLineItem>,
+    {
+        super::status_line_layout::split(items)
+            .into_iter()
+            .filter_map(|row| self.status_line_for_items(row, use_theme_colors))
+            .collect()
+    }
+
     pub(crate) fn status_line_for_items<I>(
         &self,
         items: I,
@@ -242,10 +308,25 @@ impl StatusSurfacePreviewData {
         I: IntoIterator<Item = StatusLineItem>,
     {
         let segments = items.into_iter().filter_map(|item| {
-            self.value_for(item.preview_item())
-                .map(|value| (item, value.to_string()))
+            if let Some(value) = super::status_line_layout::spacing(item) {
+                return Some((item, value));
+            }
+            if crate::custom_status_items::is_custom(item) {
+                return Some((item, crate::custom_status_items::value(item)));
+            }
+            self.value_for(item.preview_item()).map(|value| {
+                (
+                    item,
+                    crate::cutex_status_presentation::text(item, value.to_string()),
+                )
+            })
         });
-        status_line_from_segments(segments, use_theme_colors, self.thread_id)
+        super::status_line_style::status_line_with_notification_style(
+            segments.collect(),
+            use_theme_colors,
+            self.notification_style,
+            self.thread_id,
+        )
     }
 }
 

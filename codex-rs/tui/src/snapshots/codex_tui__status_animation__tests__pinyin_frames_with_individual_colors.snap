@@ -1,0 +1,8 @@
+---
+source: tui/src/status_animation_tests.rs
+assertion_line: 21
+expression: snapshot
+---
+0ms next=Some(250ms): [Span::from("旅").fg(Color::Rgb(247, 179, 205)), Span::from("tu").fg(Color::Rgb(116, 186, 195)).underlined(), Span::from("▏").fg(Color::Rgb(217, 180, 95)), Span::from("       ")]
+250ms next=Some(500ms): [Span::from("旅途").fg(Color::Rgb(224, 142, 178)), Span::from(" "), Span::from("       ")]
+750ms next=Some(250ms): [Span::from("旅").fg(Color::Rgb(247, 179, 205)), Span::from("tu").fg(Color::Rgb(116, 186, 195)).underlined(), Span::from("▏").fg(Color::Rgb(217, 180, 95)), Span::from("       ")]

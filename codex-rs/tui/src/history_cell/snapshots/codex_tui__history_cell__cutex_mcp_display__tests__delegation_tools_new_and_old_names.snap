@@ -1,0 +1,121 @@
+---
+source: tui/src/history_cell/cutex_mcp_display_tests.rs
+expression: "out.join(\"\\n\")"
+---
+[agent_delegate]
+• Delegating to Kimi · Parser review
+• Delegated to Kimi · Parser review
+  Review the parser
+  and report
+  State: queued
+  Delegation: del-1
+[agent_ask]
+• Delegating to cutex.kimi
+• Delegated to Kimi
+  Review the parser
+  State: pendingReview
+  Delegation: ask-1
+[delegation_wait]
+• Waiting for delegations · del-1
+• Received 1 delegation result
+  Kimi · Parser review: completed
+[agent_wait]
+• Waiting for delegations · 3
+• No delegation result yet
+  Kimi: running
+[delegation_stop]
+• Stopping delegation · del-1
+• Stop requested · del-1
+[delegation_close]
+• Accepting delegation · del-1
+• Accepted delegation · del-1
+[ask_close]
+• Stopping delegation · ask-1
+• Stopped delegation · ask-1
+[ask_close]
+• Abandoning delegation · ask-1
+• Delegation not closed · ask-1
+  Code: ask_closed
+  the ask is already closed
+[delegation_read]
+• Reading delegation result · del-1
+• Read delegation result · del-1
+  Status: completed
+[ask_read]
+• Reading delegation attachment · ask-1
+• Read delegation attachment · ask-1
+[delegation_progress]
+• Posting delegation progress
+• Posted delegation progress · del-1
+  halfway
+[agent_reply]
+• Posting delegation progress · ask-1
+• Posted delegation progress · ask-1
+  halfway
+[question_answer]
+• Answering question · q-1
+• Answered question · q-1
+  sqlite
+[agent_respond]
+• Answering question · q-1
+• Answered question · q-1
+  sqlite; wal
+[agent_tell]
+• Sending note to cutex.kimi
+• Sent note to Kimi
+  fyi: main is green
+[agent_tell]
+• Sending note to Kimi
+• Outcome uncertain · Kimi
+  {"ok": false, "status": "response_uncertain", "code": "outcome_unknown"}
+[agent_list]
+• Listing agents
+• Listed agents · 2 visible
+  Your open delegations: 1
+  Unclaimed results: 1
+[agent_list]
+• Listing agents
+• Listed agents · 1 visible
+  Your open delegations: 2
+  Delegations to you: 1
+[alarm_set]
+• Setting alarm for Kimi · in 600s
+• Set alarm for Kimi · 2026-10-08T12:00:00Z
+  check CI
+[set_alarm]
+• Setting alarm for Kimi · 2026-10-08 12:00
+• Alarm not set for Kimi
+  Code: alarm_rejected
+  Target not visible to caller
+[alarm_list]
+• Listing alarms
+• Listed alarms · 2
+[cancel_alarm]
+• Cancelling alarm · a1
+• Cancelled alarm · a1
+[service_register]
+• Registering service · myapp-web
+• Registered service · myapp-web
+[cutex_service_list]
+• Listing services
+• Listed services
+[agent_create]
+• Creating agent · worker
+• Created agent · worker
+[agent_archive]
+• Archiving agent · worker
+• Archived agent · worker
+[member_add]
+• Adding member · worker
+• Added member · worker
+[member_remove]
+• Removing member · worker
+• Member not removed · worker
+  Code: not_a_member
+  worker is not a member
+[member_runtime]
+• Changing member runtime · worker
+• Changed member runtime · worker
+[director_rotate]
+• Rotating director · next
+• Rotated director · next

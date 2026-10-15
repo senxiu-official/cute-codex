@@ -409,6 +409,7 @@ mod job {
                 | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::TokenUsageRecord(_)
+                | RolloutItem::ExternalInput(_)
                 | RolloutItem::RealtimeItem(_)
                 | RolloutItem::WorldState(_)
                 | RolloutItem::RetainedContext(_)

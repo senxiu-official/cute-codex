@@ -1484,6 +1484,7 @@ async fn bang_shell_enter_while_task_running_submits_run_user_shell_command() {
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "test-model".to_string(),

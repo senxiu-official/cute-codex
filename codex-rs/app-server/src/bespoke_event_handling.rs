@@ -1024,8 +1024,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::TokenCount(token_count_event) => {
-            handle_token_count_event(conversation_id, event_turn_id, token_count_event, &outgoing)
-                .await;
+            let compaction_count = conversation.auto_compact_window_number().await;
+            handle_token_count_event(
+                conversation_id,
+                event_turn_id,
+                compaction_count,
+                token_count_event,
+                &outgoing,
+            )
+            .await;
         }
         EventMsg::Error(ev) => {
             thread_watch_manager
@@ -1579,11 +1586,13 @@ async fn respond_to_pending_interrupts(
 async fn handle_token_count_event(
     conversation_id: ThreadId,
     turn_id: String,
+    compaction_count: u64,
     token_count_event: TokenCountEvent,
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent { info, rate_limits } = token_count_event;
-    if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
+    if let Some(mut token_usage) = info.map(ThreadTokenUsage::from) {
+        token_usage.compaction_count = Some(compaction_count);
         let notification = ThreadTokenUsageUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id,
@@ -3698,6 +3707,7 @@ mod tests {
         handle_token_count_event(
             conversation_id,
             turn_id.clone(),
+            /*compaction_count*/ 0,
             TokenCountEvent {
                 info: Some(info),
                 rate_limits: Some(rate_limits),
@@ -3716,6 +3726,7 @@ mod tests {
                 assert_eq!(usage.total.cached_input_tokens, 25);
                 assert_eq!(usage.last.output_tokens, 7);
                 assert_eq!(usage.model_context_window, Some(4096));
+                assert_eq!(usage.compaction_count, Some(0));
             }
             other => bail!("unexpected notification: {other:?}"),
         }
@@ -3751,6 +3762,7 @@ mod tests {
         handle_token_count_event(
             conversation_id,
             turn_id.clone(),
+            /*compaction_count*/ 2,
             TokenCountEvent {
                 info: None,
                 rate_limits: None,

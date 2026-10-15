@@ -17,6 +17,10 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
+        if self.config.model_provider_id == "cute-claude" {
+            self.open_claude_permissions_popup();
+            return;
+        }
         if self.config.explicit_permission_profile_mode
             || self.permission_profiles_menu_opened
             || self
@@ -30,6 +34,65 @@ impl ChatWidget {
         }
 
         self.open_legacy_permissions_popup();
+    }
+
+    fn open_claude_permissions_popup(&mut self) {
+        let current_approval =
+            AskForApproval::from(self.config.permissions.approval_policy.value());
+        let current_reviewer = self.config.approvals_reviewer;
+        let items = [
+            (
+                ASK_FOR_APPROVAL_LABEL,
+                "Claude asks you when a tool needs permission (default).",
+                AskForApproval::OnRequest,
+                ApprovalsReviewer::User,
+            ),
+            (
+                APPROVE_FOR_ME_LABEL,
+                "Claude's native classifier approves or denies tool requests (auto).",
+                AskForApproval::OnRequest,
+                ApprovalsReviewer::AutoReview,
+            ),
+            (
+                "Full Access",
+                "Run enabled tools without routine permission prompts (bypassPermissions).",
+                AskForApproval::Never,
+                ApprovalsReviewer::User,
+            ),
+        ]
+        .into_iter()
+        .map(|(name, description, approval, reviewer)| SelectionItem {
+            name: name.to_string(),
+            description: Some(description.to_string()),
+            is_current: current_approval == approval && current_reviewer == reviewer,
+            actions: vec![Box::new(move |tx| {
+                // Apply the server-confirmed snapshot; don't optimistically report success.
+                tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                    /*cwd*/ None,
+                    Some(approval),
+                    Some(reviewer),
+                    /*permission_profile*/ None,
+                    /*active_permission_profile*/ None,
+                    /*model*/ None,
+                    /*effort*/ None,
+                    /*summary*/ None,
+                    /*service_tier*/ None,
+                    /*collaboration_mode*/ None,
+                    /*personality*/ None,
+                )));
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        })
+        .collect();
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Update Claude Permissions".to_string()),
+            footer_note: Some("Uses Claude permissions; no Codex OS sandbox.".dim().into()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header: Box::new(()),
+            ..Default::default()
+        });
     }
 
     pub(super) fn open_legacy_permissions_popup(&mut self) {

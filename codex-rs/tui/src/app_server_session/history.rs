@@ -64,8 +64,12 @@ impl HistoryLoadBudget {
                 items: Some(HISTORY_ITEM_SCAN_LIMIT),
             };
         }
-        let rows = local_settings
-            .and_then(|settings| resize_reflow_max_rows(settings.terminal_resize_reflow()));
+        let rows = if scope == HistoryHydrationScope::Complete {
+            None
+        } else {
+            local_settings
+                .and_then(|settings| resize_reflow_max_rows(settings.terminal_resize_reflow()))
+        };
         let items = match (scope, config, rows) {
             (HistoryHydrationScope::Complete, _, _)
             | (HistoryHydrationScope::ThroughTurn(_), _, _)
@@ -339,6 +343,11 @@ impl AppServerSession {
             return Ok(());
         }
 
+        let scope = if self.client.presentation_version() == Some(1) {
+            HistoryHydrationScope::Complete
+        } else {
+            scope
+        };
         let page = self
             .thread_turns_page(thread_id, turn_cursor, INITIAL_HISTORY_TURN_LIMIT)
             .await?;
@@ -381,7 +390,9 @@ impl AppServerSession {
             {
                 break;
             }
-            if let Some((config, local_settings)) = config.zip(local_settings) {
+            if let Some((config, local_settings)) =
+                config.zip(local_settings).filter(|_| budget.rows.is_some())
+            {
                 rendered_rows = rendered_history_rows(
                     thread_id,
                     thread,

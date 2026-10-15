@@ -112,7 +112,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => false,
         },
-        RolloutItem::RealtimeItem(_)
+        RolloutItem::ExternalInput(_)
+        | RolloutItem::RealtimeItem(_)
         | RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. }
         | RolloutItem::RetainedContext(_)
@@ -949,6 +950,10 @@ impl LocalAgentControl {
         let fork_context_started_at = Instant::now();
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await?;
+        let _external_input_guard = parent_thread
+            .session
+            .external_input_migration_guard()
+            .await?;
         let (subagent_developer_instructions, parent_developer_instructions) = match (
             multi_agent_version,
             config
@@ -1171,7 +1176,7 @@ impl LocalAgentControl {
                     }
                     true
                 }
-                RolloutItem::RealtimeItem(_) => false,
+                RolloutItem::ExternalInput(_) | RolloutItem::RealtimeItem(_) => false,
                 RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::TurnContext(_)

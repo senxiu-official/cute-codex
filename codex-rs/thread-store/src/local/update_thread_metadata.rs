@@ -35,9 +35,15 @@ use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::local::read_thread;
 
+pub(super) enum MetadataWritePolicy {
+    Compatible,
+    Required,
+}
+
 pub(super) async fn update_thread_metadata(
     store: &LocalThreadStore,
     params: UpdateThreadMetadataParams,
+    policy: MetadataWritePolicy,
 ) -> ThreadStoreResult<StoredThread> {
     let thread_id = params.thread_id;
     let mut pending_metadata = store.pending_thread_metadata.lock(thread_id).await;
@@ -113,8 +119,10 @@ pub(super) async fn update_thread_metadata(
     } else {
         None
     };
-    let require_sqlite_write =
-        pending_patch.is_some() || sqlite_write_failure_should_block(&patch) || paginated;
+    let require_sqlite_write = matches!(policy, MetadataWritePolicy::Required)
+        || pending_patch.is_some()
+        || sqlite_write_failure_should_block(&patch)
+        || paginated;
     let mut updated = apply_metadata_update(
         store,
         thread_id,

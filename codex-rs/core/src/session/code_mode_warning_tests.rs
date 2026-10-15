@@ -10,6 +10,7 @@ const MODEL_SLUG: &str = "test-model";
 
 fn known_model_info() -> ModelInfo {
     ModelInfo {
+        request_model: None,
         used_fallback_model_metadata: false,
         ..model_info_from_slug(MODEL_SLUG)
     }

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/cutex_presentation_tests.rs
+expression: observed
+---
+[
+    (
+        "• Queried job · job-123\n  State: running\n",
+        "• Called cutex_job.query({\"jobId\":\"job-123\"})\n  └ {\"schema\":\"cutex/job-service-core/v1\",\"jobId\":\"job-\n        123\",\"revision\":1,\"state\":\"running\"}\n",
+        "Called cutex_job.query({\"jobId\":\"job-123\"})\n{\"schema\":\"cutex/job-service-core/v1\",\"jobId\":\"job-123\",\"revision\":1,\"state\":\"running\"}\n",
+    ),
+]

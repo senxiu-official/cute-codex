@@ -7,6 +7,7 @@ mod external_agent_config;
 pub(crate) mod fs;
 mod history;
 mod models;
+mod presentation;
 pub(crate) mod provider_selection;
 #[cfg(test)]
 #[path = "app_server_session/provider_selection_tests.rs"]
@@ -1029,6 +1030,9 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.presentation_timeline = self
+            .presentation_timeline(started.session.thread_id)
+            .await?;
         started.session.fork_parent_title = fork_parent.and_then(|thread| thread.name);
         if self.task_tools_available(thread_id) {
             started.task_tools_available = true;
@@ -2447,6 +2451,7 @@ async fn thread_session_state_from_thread_response(
         windows_sandbox_host,
         thread_id,
         forked_from_id,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name,
         model,

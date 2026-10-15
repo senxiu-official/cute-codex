@@ -256,12 +256,15 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod activity_groups;
 mod activity_presentation;
+mod claude_tools;
 mod command_lifecycle;
 mod connector_mentions;
 mod connectors;
 mod constructor;
 mod dynamic_activity;
 mod empty_state_policy;
+mod notification_ack;
+mod notification_control;
 pub(crate) use self::connectors::ConnectorScopeGeneration;
 use self::connectors::ConnectorsState;
 mod exec_state;
@@ -352,6 +355,7 @@ mod recap;
 mod reset_credits;
 pub(crate) use self::rate_limits::limit_label_for_window;
 mod completion;
+mod presentation;
 mod realtime;
 mod realtime_settings;
 mod realtime_split_flap;
@@ -383,6 +387,7 @@ mod windows_sandbox_prompts;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
+mod cutex_quota_clock;
 mod status_controls;
 mod status_surfaces;
 mod streaming;
@@ -560,6 +565,7 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
+    cutex_quota_minute: Option<i64>,
     pending_rate_limit_reset_request_id: Option<u64>,
     pending_rate_limit_reset_idempotency_key: Option<String>,
     rate_limit_reset_picker_request_id: Option<u64>,
@@ -693,6 +699,7 @@ pub(crate) struct ChatWidget {
     permission_shortcut_pending: bool,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    notification_control: notification_control::NotificationControl,
     /// When `Some`, the user has pressed a quit shortcut and the second press
     /// must occur before `quit_shortcut_expires_at`.
     quit_shortcut_expires_at: Option<Instant>,
@@ -931,6 +938,7 @@ fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsage
             reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
         },
         model_context_window: token_usage.model_context_window,
+        compaction_count: token_usage.compaction_count,
     }
 }
 
@@ -1128,8 +1136,15 @@ impl ChatWidget {
 
     fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
         info.model_context_window.map(|window| {
-            info.last_token_usage
-                .percent_of_context_window_remaining(window)
+            if self.config.model_provider_id == "cute-claude" {
+                crate::status::provider_limits::context_remaining(
+                    info.last_token_usage.tokens_in_context_window(),
+                    window,
+                )
+            } else {
+                info.last_token_usage
+                    .percent_of_context_window_remaining(window)
+            }
         })
     }
 
@@ -1176,12 +1191,16 @@ impl ChatWidget {
         {
             self.refresh_terminal_title();
         }
+        self.refresh_custom_status_animation();
+        self.refresh_cutex_quota_clock();
         self.refresh_status_line_if_workspace_headline_due();
         self.refresh_thread_usage_if_settlement_due();
+        self.refresh_notification_control(/*cycle*/ false);
     }
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.transcript.take_active_cell() {
+            let active = self.group_pending_presentation(active);
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
             self.request_pending_usage_output_insertion();
         }
@@ -1214,9 +1233,11 @@ impl ChatWidget {
             return;
         };
         if let Some(active) = self.take_history_insertion_prefix(cell.as_ref()) {
+            let active = self.group_pending_presentation(active);
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
             self.request_pending_usage_output_insertion();
         }
+        let cell = self.group_pending_presentation(cell);
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 

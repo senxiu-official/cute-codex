@@ -1101,6 +1101,13 @@ impl RolloutRecorder {
             if line.trim().is_empty() {
                 continue;
             }
+            if crate::is_crash_residue_line(line.as_bytes()) {
+                warn!(
+                    "skipping crash residue rollout line ({} bytes with NUL, not a record) in {path:?}",
+                    line.len()
+                );
+                continue;
+            }
             saw_non_empty_line = true;
             let mut value: Value = match serde_json::from_str(&line) {
                 Ok(value) => value,
@@ -1112,6 +1119,10 @@ impl RolloutRecorder {
             };
             if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
                 trace!("skipping legacy ghost_snapshot rollout line");
+                continue;
+            }
+            if crate::is_retired_rollout_line(&value) {
+                trace!("skipping retired rollout line");
                 continue;
             }
             if thread_id.is_none() {
@@ -2200,6 +2211,7 @@ async fn resume_candidate_matches_cwd(
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)
             | RolloutItem::WorldState(_)
+            | RolloutItem::ExternalInput(_)
             | RolloutItem::RealtimeItem(_)
             | RolloutItem::TokenUsageRecord(_)
             | RolloutItem::RetainedContext(_)

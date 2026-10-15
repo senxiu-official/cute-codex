@@ -56,6 +56,7 @@ pub use auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 pub use auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
 pub use auth::RefreshTokenError;
 pub use auth::UnauthorizedRecovery;
+pub use auth::configure_auth_file;
 pub use auth::default_client;
 pub use auth::enforce_login_restrictions;
 pub use auth::is_workload_identity_selected;
@@ -75,6 +76,7 @@ pub use auth_env_telemetry::collect_auth_env_telemetry;
 pub use outbound_proxy::AuthRouteConfig;
 pub use token_data::TokenData;
 
+pub use auth::explicit_auth_file_selected;
 pub use gateway_auth::GatewayAuthConfig;
 pub use gateway_auth::GatewayAuthError;
 pub use gateway_auth::GatewayAuthManager;

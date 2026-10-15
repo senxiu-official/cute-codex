@@ -252,6 +252,25 @@ async fn load_config_applies_optional_mcp_startup_grace() -> std::io::Result<()>
 }
 
 #[tokio::test]
+async fn load_config_resolves_thread_unload_enabled() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    for (toml, enabled) in [
+        ("", true),
+        ("thread_unload_enabled = true", true),
+        ("thread_unload_enabled = false", false),
+    ] {
+        let config = Config::load_from_base_config_with_overrides(
+            toml::from_str(toml)?,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(config.thread_unload_enabled, enabled);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn load_config_resolves_thread_unload_delay() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     for (toml, seconds) in [

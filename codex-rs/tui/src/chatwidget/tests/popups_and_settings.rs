@@ -4367,3 +4367,51 @@ async fn account_change_dismisses_the_previous_app_directory_snapshot() {
         format!("Before account change:\n{before}\n\nAfter account change:\n{after}")
     );
 }
+
+#[tokio::test]
+async fn skills_response_for_current_cwd_populates_mentions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let skill: codex_app_server_protocol::SkillMetadata = serde_json::from_value(serde_json::json!({
+        "name":"bio-review-bridge", "description":"Bio review", "path":"/tmp/bio-review-bridge/SKILL.md", "scope":"user", "enabled":true, "pluginId":null
+    })).unwrap();
+    let response = codex_app_server_protocol::SkillsListResponse {
+        data: vec![codex_app_server_protocol::SkillsListEntry {
+            cwd: chat.config.cwd.to_path_buf(),
+            skills: vec![skill],
+            errors: vec![],
+        }],
+    };
+    chat.set_skills_from_response(&response);
+    assert_eq!(chat.skills_all.len(), 1);
+    chat.insert_str("$bio");
+    assert!(render_bottom_popup(&chat, 100).contains("bio-review-bridge"));
+}
+
+#[tokio::test]
+async fn late_skills_response_for_other_cwd_preserves_current_mentions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let skills: Vec<codex_app_server_protocol::SkillMetadata> = ["bio-review-bridge", "another-skill"].iter().map(|name| serde_json::from_value(serde_json::json!({
+        "name":name, "description":"fixture", "path":format!("/tmp/{name}/SKILL.md"), "scope":"user", "enabled":true, "pluginId":null
+    })).unwrap()).collect();
+    let mut response = codex_app_server_protocol::SkillsListResponse {
+        data: vec![codex_app_server_protocol::SkillsListEntry {
+            cwd: chat.config.cwd.to_path_buf(),
+            skills,
+            errors: vec![],
+        }],
+    };
+    chat.set_skills_from_response(&response);
+    assert_eq!(chat.skills_all.len(), 2);
+    response.data[0].cwd = chat.config.cwd.join("old-launch-directory").to_path_buf();
+    chat.set_skills_from_response(&response);
+    assert_eq!(chat.skills_all.len(), 2);
+    chat.insert_str("$bio");
+    assert!(render_bottom_popup(&chat, 100).contains("bio-review-bridge"));
+
+    // A genuinely empty response for the active directory must still clear it.
+    response.data[0].cwd = chat.config.cwd.to_path_buf();
+    response.data[0].skills.clear();
+    chat.set_skills_from_response(&response);
+    assert!(chat.skills_all.is_empty());
+    assert!(!render_bottom_popup(&chat, 100).contains("bio-review-bridge"));
+}

@@ -172,6 +172,7 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
         visibility: ModelVisibility::List,
+        request_model: None,
         used_fallback_model_metadata: false,
         ..model_info_from_slug(slug)
     }

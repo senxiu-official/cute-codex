@@ -505,7 +505,12 @@ impl TurnContext {
             .auto_review
             .as_ref()
             .and_then(|auto_review| auto_review.ignore_rules.as_ref())
-            .is_some_and(|models| models.contains(&self.model_info().slug));
+            .is_some_and(|models| {
+                models.iter().any(|candidate| {
+                    candidate == &self.model_info().slug
+                        || candidate == self.model_info().request_model()
+                })
+            });
         if self.model_info().model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER)
             || ignore_rules
         {

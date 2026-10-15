@@ -26,6 +26,10 @@ pub mod dynamic_tools;
 mod environment;
 pub mod error;
 pub mod exec_output;
+pub mod external_input;
+pub mod external_input_record;
+pub mod external_input_status;
+pub mod external_input_view;
 pub mod items;
 mod legacy_events;
 pub mod local_media;
@@ -54,3 +58,5 @@ pub mod security_risk;
 pub mod shell_environment;
 pub mod turn_input;
 pub mod user_input;
+
+pub mod presentation;

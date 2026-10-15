@@ -86,7 +86,9 @@ use codex_protocol::auth::AuthMode;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::ToolSchemaCompat;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -99,9 +101,11 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_tools::apply_tool_schema_compat;
 use codex_tools::create_tools_json_for_responses_api;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
+use codex_tools::normalize_tool_json_strict;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -272,6 +276,9 @@ pub struct ModelClient {
     restored_history: bool,
     request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
     executed_tool_calls: Option<ExecutedToolCalls>,
+    /// Lowering applied to tool parameter schemas when a request is built
+    /// (config `tool_schema_compat`; `Off` sends them unchanged).
+    tool_schema_compat: ToolSchemaCompat,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -288,6 +295,7 @@ pub struct ModelClient {
 /// the previous turn's sticky-routing token into the next turn, which violates the client/server
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
+    external_input_attempt: bool,
     client: ModelClient,
     websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
@@ -541,7 +549,13 @@ impl ModelClient {
             restored_history: false,
             request_contributors,
             executed_tool_calls: None,
+            tool_schema_compat: ToolSchemaCompat::Off,
         }
+    }
+
+    pub fn with_tool_schema_compat(mut self, tool_schema_compat: ToolSchemaCompat) -> Self {
+        self.tool_schema_compat = tool_schema_compat;
+        self
     }
 
     pub(crate) fn with_executed_tool_calls(mut self, recorder: ExecutedToolCalls) -> Self {
@@ -609,6 +623,7 @@ impl ModelClient {
             websocket_session.auth_owner_generation = auth_owner_generation;
         }
         ModelClientSession {
+            external_input_attempt: false,
             client: self.clone(),
             websocket_session,
             turn_state: Arc::new(OnceLock::new()),
@@ -759,7 +774,7 @@ impl ModelClient {
                 .with_telemetry(Some(request_telemetry));
 
         let payload = ApiMemorySummarizeInput {
-            model: model_info.slug.clone(),
+            model: model_info.request_model().to_string(),
             raw_memories,
             reasoning: effort
                 .map(|effort| model_info.resolve_reasoning_effort(effort))
@@ -899,6 +914,20 @@ impl ModelClient {
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
         let is_openai = self.state.provider.info().is_openai();
+        // A normalized copy only under `tool_schema_compat = "strict"`; `off`
+        // serializes the prompt's specs as they are.
+        let request_tools = apply_tool_schema_compat(&prompt.tools, self.tool_schema_compat);
+        if self.tool_schema_compat == ToolSchemaCompat::Strict {
+            // Tools loaded by `tool_search` travel in history items; the
+            // provider reads their schemas as function declarations too.
+            for item in &mut input {
+                if let ResponseItem::ToolSearchOutput { tools, .. }
+                | ResponseItem::AdditionalTools { tools, .. } = item
+                {
+                    tools.iter_mut().for_each(normalize_tool_json_strict);
+                }
+            }
+        }
         let (instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
             // within the thread so retries and resumed sessions preserve their identity.
@@ -907,9 +936,9 @@ impl ModelClient {
                 self.state.thread_id.to_string().as_bytes(),
             );
             let tools = if self.state.provider.capabilities().namespace_tools {
-                create_tools_json_for_responses_lite(&prompt.tools)?
+                create_tools_json_for_responses_lite(&request_tools)?
             } else {
-                create_tools_json_for_responses_api(&prompt.tools)?
+                create_tools_json_for_responses_api(&request_tools)?
             };
             let mut prefix = vec![ResponseItem::AdditionalTools {
                 id: Some(ResponseItemId::with_suffix(
@@ -934,7 +963,7 @@ impl ModelClient {
         } else {
             (
                 prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
+                Some(create_tools_raw_json_for_responses_api(&request_tools)?.into()),
             )
         };
         if !is_openai {
@@ -948,6 +977,7 @@ impl ModelClient {
                     *encrypted_function_args = None;
                 }
             }
+            Self::project_unpaired_external_events_for_strict_responses(&mut input);
         }
         let reasoning = self.build_reasoning(model_info, effort, summary);
         let stream_options = (self.state.concurrent_reasoning_summaries_enabled
@@ -987,7 +1017,7 @@ impl ModelClient {
         }
         let client_metadata = responses_metadata.client_metadata(include_internal);
         let request = ResponsesApiRequest {
-            model: model_info.slug.clone(),
+            model: model_info.request_model().to_string(),
             instructions,
             input,
             tools,
@@ -1007,9 +1037,42 @@ impl ModelClient {
         Ok(request)
     }
 
+    fn project_unpaired_external_events_for_strict_responses(input: &mut [ResponseItem]) {
+        for item in input {
+            if let ResponseItem::FunctionCallOutput {
+                id,
+                call_id: None,
+                name: Some(name),
+                namespace: Some(namespace),
+                output,
+                ..
+            } = item
+                && name == "external_event"
+                && namespace == "external"
+                && let Some(text) = output.text_content()
+            {
+                *item = ResponseItem::Message {
+                    id: id.clone(),
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: text.to_string(),
+                    }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                };
+            }
+        }
+    }
+
     fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
         for item in input {
-            if item.id().is_some_and(|id| !id.is_prefixed()) {
+            // Item IDs are optional request metadata, not local history identity.
+            // Keep legacy/oversized IDs in history, but omit them from provider input.
+            // A byte bound also bounds the provider's 64-character string limit.
+            if item
+                .id()
+                .is_some_and(|id| !id.is_prefixed() || id.len() > 64)
+            {
                 item.set_id(/*new_id*/ None);
             }
             if !self.state.content_item_kinds_enabled {
@@ -1341,6 +1404,10 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn set_external_input_attempt(&mut self, enabled: bool) {
+        self.external_input_attempt = enabled;
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///
@@ -1478,12 +1545,12 @@ impl ModelClientSession {
             );
             let responses_headers = self
                 .client
-                .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
+                .responses_headers(client_setup.auth.as_ref(), model_info.request_model());
             let mut websocket_metadata = responses_metadata.clone();
             websocket_metadata.routing_hint = self.client.build_routing_hint_header(
                 client_setup.auth.as_ref(),
                 &responses_headers,
-                &model_info.slug,
+                model_info.request_model(),
                 model_info
                     .service_tier_for_request(service_tier.clone())
                     .as_deref(),
@@ -1660,10 +1727,14 @@ impl ModelClientSession {
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self
+            let mut client_setup = self
                 .client
                 .current_client_setup(ClientRouting::Workspace)
                 .await?;
+            if self.external_input_attempt {
+                // The transport iterates 0..=max_attempts: zero means one request.
+                client_setup.api_provider.retry.max_attempts = 0;
+            }
             let include_internal = self
                 .client
                 .state
@@ -1671,7 +1742,7 @@ impl ModelClientSession {
                 .include_internal_metadata(&client_setup.api_provider);
             let responses_headers = self
                 .client
-                .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
+                .responses_headers(client_setup.auth.as_ref(), model_info.request_model());
             tracing::Span::current().record("api.path", "/responses");
             let transport = self.client.build_api_transport(
                 &client_setup.api_provider,
@@ -1742,7 +1813,7 @@ impl ModelClientSession {
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
                 &self.client.state.thread_id.to_string(),
-                &model_info.slug,
+                model_info.request_model(),
                 codex_extension_api::ModelRequestKind::Generation,
                 &mut request.client_metadata,
             );
@@ -1775,11 +1846,12 @@ impl ModelClientSession {
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(unauthorized_transport))
-                    if self
-                        .client
-                        .state
-                        .provider
-                        .is_recoverable_auth_error(&unauthorized_transport) =>
+                    if !self.external_input_attempt
+                        && self
+                            .client
+                            .state
+                            .provider
+                            .is_recoverable_auth_error(&unauthorized_transport) =>
                 {
                     let response_debug_context =
                         extract_response_debug_context(&unauthorized_transport);
@@ -1866,7 +1938,7 @@ impl ModelClientSession {
                 .include_internal_metadata(&client_setup.api_provider);
             let responses_headers = self
                 .client
-                .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
+                .responses_headers(client_setup.auth.as_ref(), model_info.request_model());
             tracing::Span::current().record("api.path", "/responses");
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -2028,7 +2100,7 @@ impl ModelClientSession {
             let interceptors = crate::model_request::prepare(
                 &self.client.request_contributors,
                 &self.client.state.thread_id.to_string(),
-                &model_info.slug,
+                model_info.request_model(),
                 if warmup {
                     codex_extension_api::ModelRequestKind::Warmup
                 } else {
@@ -2229,7 +2301,7 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled() {
+                if !self.external_input_attempt && self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(

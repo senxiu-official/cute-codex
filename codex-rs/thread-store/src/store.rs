@@ -192,6 +192,18 @@ pub trait ThreadStore: Any + Send + Sync {
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreFuture<'_, StoredThreadHistory>;
 
+    /// Loads strict authoritative display validation history, never model context.
+    fn load_presentation_history(
+        &self,
+        _params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, StoredThreadHistory> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "load_presentation_history",
+            })
+        })
+    }
+
     /// Loads the persisted rollout items needed to reconstruct the latest model-visible context.
     ///
     /// Implementations that cannot perform a targeted read may return the full persisted history.
@@ -492,6 +504,16 @@ pub trait ThreadStore: Any + Send + Sync {
         &self,
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, Option<StoredThread>>;
+
+    /// Publishes metadata for an explicit persistence acknowledgement. Implementations
+    /// must propagate publication errors rather than treating indexing as best effort.
+    /// Stores with best-effort updates must override this default forwarding path.
+    fn publish_thread_metadata(
+        &self,
+        params: UpdateThreadMetadataParams,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move { self.update_thread_metadata(params).await.map(|_| ()) })
+    }
 
     /// Moves a thread to, within, or out of a server-ordered section.
     fn move_thread_to_section(

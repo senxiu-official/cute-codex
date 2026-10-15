@@ -544,6 +544,7 @@ mod command_exec_processor;
 mod config_processor;
 mod diagnostics;
 mod environment_processor;
+mod external_input_processor;
 mod feedback_doctor_report;
 mod feedback_processor;
 mod feedback_rollout_history;
@@ -725,3 +726,7 @@ pub(crate) fn build_legacy_api_turns_from_rollout_items(items: &[RolloutItem]) -
     }
     builder.finish()
 }
+
+pub(crate) use external_input_processor::ExternalInputRequestProcessor;
+
+mod presentation_processor;

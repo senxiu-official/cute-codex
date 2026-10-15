@@ -120,7 +120,51 @@ pub(super) async fn load_export_transcript(
         }
     }
     let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
-    for item in visible_export_items(thread.turns) {
+    let visible = visible_export_items(thread.turns);
+    let timeline = app_server
+        .presentation_timeline(thread_id)
+        .await
+        .map_err(|error| format!("could not load durable notices: {error}"))?;
+    if let Some(timeline) = timeline {
+        let visible_ids: std::collections::HashSet<_> =
+            visible.iter().map(|item| item.id().to_owned()).collect();
+        let mut seen = std::collections::BTreeMap::new();
+        for entry in timeline {
+            match entry {
+                codex_app_server_protocol::ThreadTimelineEntry::Presentation { item, .. } => {
+                    let key = (item.origin_thread_id.clone(), item.presentation.id.clone());
+                    if let Some(previous) = seen.insert(key, item.clone()) {
+                        if previous != item {
+                            return Err("conflicting durable notice history".into());
+                        }
+                        continue;
+                    }
+                    cells.push(Arc::new(
+                        crate::history_cell::PresentationHistoryCell::new(item)
+                            .map_err(str::to_owned)?,
+                    ));
+                }
+                codex_app_server_protocol::ThreadTimelineEntry::Item { item, .. }
+                    if visible_ids.contains(item.id()) =>
+                {
+                    if let Some(cell) = export_activity_cell(&item) {
+                        cells.push(Arc::new(cell));
+                    } else {
+                        cells.extend(thread_items_to_transcript_cells(
+                            Some(thread_id),
+                            &thread.cwd,
+                            [*item],
+                            visibility,
+                            config,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Ok(cells);
+    }
+    for item in visible {
         if let Some(cell) = export_activity_cell(&item) {
             cells.push(Arc::new(cell));
         } else {

@@ -13,6 +13,7 @@ pub fn is_persisted_rollout_item(item: &RolloutItem, history_mode: ThreadHistory
         RolloutItem::InterAgentCommunication(_)
         | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev, history_mode),
+        RolloutItem::ExternalInput(_) => true,
         RolloutItem::RealtimeItem(_) => matches!(history_mode, ThreadHistoryMode::Paginated),
         // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
         RolloutItem::Compacted(_)
@@ -110,7 +111,8 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
                         if item.kind == SubAgentActivityKind::Completed
                 )
         }
-        EventMsg::TokenCount(_)
+        EventMsg::PresentationAppended(_)
+        | EventMsg::TokenCount(_)
         | EventMsg::ThreadGoalUpdated(_)
         | EventMsg::ThreadRolledBack(_)
         | EventMsg::TurnAborted(_)

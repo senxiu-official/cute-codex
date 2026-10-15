@@ -73,6 +73,10 @@ impl App {
                 );
                 self.refresh_mcp_startup_expected_servers_from_config();
                 self.chat_widget.finish_mcp_startup_after_lag();
+                if let Some(thread_id) = self.chat_widget.thread_id() {
+                    app_server_client
+                        .request_presentation_reconcile(thread_id, self.app_event_tx.clone());
+                }
                 if let Some(task) = self.agents_overview.refresh_task.take() {
                     task.abort();
                 }
@@ -120,6 +124,21 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if let ServerNotification::TurnCompleted(turn) = &notification
+            && self
+                .chat_widget
+                .thread_id()
+                .is_some_and(|id| id.to_string() == turn.thread_id)
+            && let Ok(id) = ThreadId::from_string(&turn.thread_id)
+        {
+            app_server_client.request_presentation_reconcile(id, self.app_event_tx.clone());
+        }
+        if let ServerNotification::ThreadReverted(reverted) = &notification
+            && let Ok(id) = ThreadId::from_string(&reverted.thread_id)
+        {
+            app_server_client.request_presentation_reconcile(id, self.app_event_tx.clone());
+        }
+        // A picker can leave an old runtime's close notification queued while the same thread
         // A picker can leave an old runtime's close notification queued while the same thread
         // is resumed. Thread IDs survive reloads, so confirm that the displayed thread is still
         // unloaded before routing a close that would exit the TUI or switch away from it.

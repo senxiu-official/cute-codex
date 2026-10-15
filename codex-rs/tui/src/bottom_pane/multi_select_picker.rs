@@ -109,7 +109,7 @@ pub type CancelCallback = Box<dyn Fn(&AppEventSender) + Send + Sync>;
 
 /// Callback to generate an optional preview line based on current item states.
 /// Returns `None` to hide the preview area.
-pub type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync>;
+pub type PreviewCallback = Box<dyn Fn(&[MultiSelectItem]) -> Vec<Line<'static>> + Send + Sync>;
 
 /// A single selectable item in the multi-select picker.
 ///
@@ -199,7 +199,7 @@ pub(crate) struct MultiSelectPicker {
     preview_builder: Option<PreviewCallback>,
 
     /// Cached preview line (updated on item changes).
-    preview_line: Option<Line<'static>>,
+    preview_line: Vec<Line<'static>>,
 
     /// Callback invoked when items change (toggle or reorder).
     on_change: Option<ChangeCallBack>,
@@ -504,7 +504,8 @@ impl MultiSelectPicker {
         self.preview_line = self
             .preview_builder
             .as_ref()
-            .and_then(|builder| builder(&self.items));
+            .map(|builder| builder(&self.items))
+            .unwrap_or_default();
     }
 
     /// Closes the picker without confirming, invoking the `on_cancel` callback.
@@ -604,7 +605,7 @@ impl Renderable for MultiSelectPicker {
     fn desired_height(&self, width: u16) -> u16 {
         let rows = self.build_rows();
         let rows_height = self.rows_height(&rows);
-        let preview_height = if self.preview_line.is_some() { 1 } else { 0 };
+        let preview_height = self.preview_line.len() as u16;
 
         let mut height = self.header.desired_height(width.saturating_sub(4));
         height = height.saturating_add(rows_height + 3);
@@ -617,7 +618,7 @@ impl Renderable for MultiSelectPicker {
         }
 
         // Reserve the footer line for the key-hint row.
-        let preview_height = if self.preview_line.is_some() { 1 } else { 0 };
+        let preview_height = self.preview_line.len() as u16;
         let hint_lines = self.footer_lines(area.width);
         let hint_height = hint_lines.len() as u16;
         let footer_height = hint_height + preview_height;
@@ -660,10 +661,12 @@ impl Renderable for MultiSelectPicker {
             picker_style::render_scroll_indicators(list_area, buf, rendered);
         }
 
-        let hint_area = if let Some(preview_line) = &self.preview_line {
-            let [preview_area, hint_area] =
-                Layout::vertical([Constraint::Length(1), Constraint::Length(hint_height)])
-                    .areas(footer_area);
+        let hint_area = if !self.preview_line.is_empty() {
+            let [preview_area, hint_area] = Layout::vertical([
+                Constraint::Length(self.preview_line.len() as u16),
+                Constraint::Length(hint_height),
+            ])
+            .areas(footer_area);
             let preview_area = Rect {
                 x: preview_area.x + 2,
                 y: preview_area.y,
@@ -671,9 +674,20 @@ impl Renderable for MultiSelectPicker {
                 height: preview_area.height,
             };
             let max_preview_width = preview_area.width.saturating_sub(2) as usize;
-            let preview_line =
-                truncate_line_with_ellipsis_if_overflow(preview_line.clone(), max_preview_width);
-            preview_line.render(preview_area, buf);
+            for (index, line) in self
+                .preview_line
+                .iter()
+                .take(preview_area.height as usize)
+                .enumerate()
+            {
+                let row = Rect {
+                    y: preview_area.y + index as u16,
+                    height: 1,
+                    ..preview_area
+                };
+                truncate_line_with_ellipsis_if_overflow(line.clone(), max_preview_width)
+                    .render(row, buf);
+            }
             hint_area
         } else {
             footer_area
@@ -760,6 +774,15 @@ impl MultiSelectPickerBuilder {
     pub fn on_preview<F>(mut self, callback: F) -> Self
     where
         F: Fn(&[MultiSelectItem]) -> Option<Line<'static>> + Send + Sync + 'static,
+    {
+        self.preview_builder = Some(Box::new(move |items| callback(items).into_iter().collect()));
+        self
+    }
+
+    /// Multi-line preview with the same clipping and ordering behavior as the original callback.
+    pub fn on_preview_lines<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(&[MultiSelectItem]) -> Vec<Line<'static>> + Send + Sync + 'static,
     {
         self.preview_builder = Some(Box::new(callback));
         self
@@ -848,7 +871,7 @@ impl MultiSelectPickerBuilder {
             search_query: String::new(),
             filtered_indices: Vec::new(),
             preview_builder: self.preview_builder,
-            preview_line: None,
+            preview_line: Vec::new(),
             on_change: self.on_change,
             on_confirm: self.on_confirm,
             on_cancel: self.on_cancel,

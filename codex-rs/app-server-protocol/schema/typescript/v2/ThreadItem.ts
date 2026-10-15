@@ -19,6 +19,7 @@ import type { CommandExecutionSource } from "./CommandExecutionSource";
 import type { CommandExecutionStatus } from "./CommandExecutionStatus";
 import type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 import type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
+import type { ExternalInputView } from "./ExternalInputView";
 import type { FileUpdateChange } from "./FileUpdateChange";
 import type { HookPromptFragment } from "./HookPromptFragment";
 import type { McpAppUi } from "./McpAppUi";
@@ -31,7 +32,7 @@ import type { PatchApplyStatus } from "./PatchApplyStatus";
 import type { SubAgentActivityKind } from "./SubAgentActivityKind";
 import type { UserInput } from "./UserInput";
 
-export type ThreadItem = { "type": "userMessage", id: string, clientId: string | null, content: Array<UserInput>, } | { "type": "hookPrompt", id: string, fragments: Array<HookPromptFragment>, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, memoryCitation: MemoryCitation | null, delivery: AgentMessageDelivery | null, questions: Array<AsyncUserInputQuestion> | null, } | { "type": "functionCallOutput", id: string, name: string, namespace: string | null, output: FunctionCallOutputBody, } | { "type": "plan", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, } | { "type": "commandExecution", id: string,
+export type ThreadItem = { "type": "userMessage", id: string, clientId: string | null, content: Array<UserInput>, } | { "type": "hookPrompt", id: string, fragments: Array<HookPromptFragment>, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, memoryCitation: MemoryCitation | null, delivery: AgentMessageDelivery | null, questions: Array<AsyncUserInputQuestion> | null, } | { "type": "functionCallOutput", id: string, name: string, namespace: string | null, output: FunctionCallOutputBody, externalInputView: ExternalInputView | null, } | { "type": "plan", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, } | { "type": "commandExecution", id: string,
 /**
  * Trusted first-party plugin id when this command resolves to one plugin script.
  */

@@ -1,12 +1,17 @@
 //! Separate persistent transcript context from the composer's transient hint row.
 //! Measurement, rendering, and cursor placement share the same reserved status rectangle.
+//! Configured status rows retain their order; clipping keeps the first row first.
 //! Shortcut help grows above the input, preserving status and close rows below it even when clipped.
 
 use super::*;
 
 impl ChatComposer {
     pub(super) fn status_surface_height(&self, options: ComposerRenderOptions<'_>) -> u16 {
-        u16::from(options.separate_status_line && self.footer.status_line_enabled)
+        if options.separate_status_line && self.footer.status_line_enabled {
+            self.footer.status_line_rows.len().max(1) as u16
+        } else {
+            0
+        }
     }
 
     pub(super) fn hint_footer_props(&self, options: ComposerRenderOptions<'_>) -> FooterProps {
@@ -14,6 +19,7 @@ impl ChatComposer {
         if self.status_surface_height(options) > 0 {
             props.status_line_enabled = false;
             props.status_line_value = None;
+            props.status_line_prefix.clear();
             props.active_agent_label = None;
         }
         props
@@ -29,6 +35,24 @@ impl ChatComposer {
             return;
         }
         let mut props = self.footer_props();
+        let mut area = area;
+        for line in std::mem::take(&mut props.status_line_prefix) {
+            if area.is_empty() {
+                return;
+            }
+            let row = Rect::new(area.x, area.y, area.width, 1);
+            let width = usize::from(inset_footer_hint_area(row).width);
+            render_footer_line(
+                row,
+                buf,
+                truncate_line_with_ellipsis_if_overflow(line, width),
+            );
+            area.y += 1;
+            area.height -= 1;
+        }
+        if area.is_empty() {
+            return;
+        }
         let show_cycle_hint = !props.is_task_running
             && !self.blocks_direct_input
             && self.draft.input_enabled

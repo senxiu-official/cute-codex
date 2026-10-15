@@ -80,6 +80,9 @@ mod exec_policy;
 #[cfg(not(target_os = "windows"))]
 mod extension_sandbox;
 mod external_auth;
+mod external_input_compaction;
+mod external_input_exclusive;
+mod external_input_fork;
 mod fork_thread;
 mod git_enrichment;
 mod guardian_authorization;
@@ -140,6 +143,7 @@ mod model_provider_requirements;
 mod model_request;
 mod model_runtime_selectors;
 mod model_switching;
+mod model_variants;
 mod model_visible_layout;
 mod models_cache_auth;
 mod models_cache_ttl;

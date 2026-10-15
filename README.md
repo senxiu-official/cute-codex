@@ -79,3 +79,13 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 - [**Open source fund**](./docs/open-source-fund.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
+
+## cute-codex
+
+This is cute-codex, a fork of OpenAI Codex used by [cutex](https://github.com/senxiu-official/cutex)
+(external input into running threads, presentations, selected auth files and a few fixes). The
+modified and added files are listed in [CUTE-CODEX-CHANGES.md](CUTE-CODEX-CHANGES.md). It is not
+an official OpenAI release.
+
+Built with Codex, Claude, DeepSeek, GLM and Kimi. (Product names are trademarks of their
+owners; naming them implies no affiliation or endorsement.)

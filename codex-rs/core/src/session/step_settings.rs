@@ -131,7 +131,7 @@ impl ResolvedStepSettings {
         overrides: &ModelInfoOverrides,
         fast_mode_enabled: bool,
     ) -> ConstraintResult<Self> {
-        let selected = self.selected.apply(update, constraints)?;
+        let mut selected = self.selected.apply(update, constraints)?;
         let model_info = if selected.collaboration_mode.model()
             == self.selected.collaboration_mode.model()
             && selected.personality == self.selected.personality
@@ -140,10 +140,27 @@ impl ResolvedStepSettings {
         } else {
             Arc::new(selected.resolve_model_info(models_manager, overrides).await)
         };
+        if !constraints.trusted_guardian_reviewer
+            && constraints
+                .requirements
+                .auto_review_required_for_model_info(&model_info)
+            && self.selected.collaboration_mode.model() != selected.collaboration_mode.model()
+            && update.approvals_reviewer.is_none()
+        {
+            constraints
+                .requirements
+                .approvals_reviewer
+                .can_set(&ApprovalsReviewer::AutoReview)?;
+            selected.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        }
         let mut next = Self::new(Arc::new(selected), model_info, fast_mode_enabled);
         next.mcp_approvals_reviewer_override = update
             .approvals_reviewer
             .or(self.mcp_approvals_reviewer_override);
+        if next.model_info.request_model.is_some() {
+            // The unresolved selection cannot see requirements on an alias's upstream model.
+            next.revalidate(constraints)?;
+        }
         Ok(next)
     }
 
@@ -157,6 +174,18 @@ impl ResolvedStepSettings {
         // Sharing these checks would also make ordinary settings updates stricter
         // after a requirements refresh.
         self.selected.validate(constraints)?;
+        if !constraints.trusted_guardian_reviewer
+            && constraints
+                .requirements
+                .auto_review_required_for_model_info(&self.model_info)
+            && (self.approvals_reviewer() != ApprovalsReviewer::AutoReview
+                || constraints.has_full_disk_write_access
+                || !constraints.guardian_approval_enabled)
+        {
+            return Err(ConstraintError::AutoReviewRequired {
+                model: self.model_info.slug.clone(),
+            });
+        }
         constraints
             .requirements
             .approval_policy

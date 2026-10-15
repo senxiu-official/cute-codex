@@ -4287,6 +4287,14 @@
       },
       "type": "object"
     },
+    "ToolSchemaCompat": {
+      "description": "Compatibility lowering applied to function / MCP tool parameter schemas right before they are serialized into a model request (config `tool_schema_compat`).\n\n`off` (default) sends the schemas unchanged. `strict` rewrites every `enum` so it sits next to one `type` that all of its values share (mixed or mismatched values become strings, `null` leaves the enum and a `[T, \"null\"]` type), for providers whose function declarations reject anything else.",
+      "enum": [
+        "off",
+        "strict"
+      ],
+      "type": "string"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -7679,11 +7687,23 @@
       "minimum": 0.0,
       "type": "integer"
     },
+    "thread_unload_enabled": {
+      "description": "Automatically unload idle app-server threads after their last subscriber disconnects. Defaults to true. Persistent hosts may disable this; explicit shutdown still works. Changes require a server restart.",
+      "type": "boolean"
+    },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",
       "format": "uint",
       "minimum": 0.0,
       "type": "integer"
+    },
+    "tool_schema_compat": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ToolSchemaCompat"
+        }
+      ],
+      "description": "Compatibility lowering of tool parameter schemas sent to the model: `off` (default, unchanged) or `strict` (every `enum` gets one `type` that all of its values share; for providers whose function declarations refuse mixed, typeless or nullable enums)."
     },
     "tool_suggest": {
       "allOf": [

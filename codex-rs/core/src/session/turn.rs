@@ -168,6 +168,9 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<Option<String>> {
+    sess.ensure_external_input_policy_allows_sampling()
+        .await
+        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
     if crate::guardian::is_basic_session_source(&turn_context.session_source) {
         crate::guardian::check_pending_guardian_input(&sess, &turn_context).await?;
     }
@@ -422,6 +425,7 @@ pub(crate) async fn run_turn(
     // 2. After auto-compact, while a model/tool continuation is pending.
 
     let mut next_step_context = Some(first_step_context);
+    let mut external_input_initial_boundary = true;
     let mut guardian_budget_compacted = false;
     loop {
         // Note that pending_input would be something like a message the user
@@ -448,6 +452,17 @@ pub(crate) async fn run_turn(
             break;
         }
 
+        let external_boundary = if can_drain_pending_input {
+            crate::external_input::InputBoundary::Drain
+        } else if external_input_initial_boundary {
+            crate::external_input::InputBoundary::Initial
+        } else {
+            crate::external_input::InputBoundary::Deferred
+        };
+        external_input_initial_boundary = false;
+        sess.consume_external_input(&turn_context, external_boundary)
+            .await
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
         // Input and turn-start injections are recorded before recovery can continue this turn.
         turn_context.extension_data.insert(RecordedTurnInput);
         let window_id = sess.current_window_id().await;
@@ -537,6 +552,8 @@ pub(crate) async fn run_turn(
             Ok((sampling_request_output, sampling_request_input)) => {
                 guardian_budget_compacted = false;
                 let SamplingRequestResult {
+                    output_observed: _,
+                    response_completed: _,
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
                 } = sampling_request_output;
@@ -563,7 +580,9 @@ pub(crate) async fn run_turn(
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))
                 .await;
-                let needs_follow_up = model_needs_follow_up || has_pending_input;
+                let has_pending_soon = sess.has_external_input_soon_for_turn(&turn_context).await;
+                let needs_follow_up =
+                    model_needs_follow_up || has_pending_input || has_pending_soon;
                 let token_limit_reached = token_status.token_limit_reached;
 
                 trace!(
@@ -1663,6 +1682,11 @@ async fn run_sampling_request(
             step_context.as_ref(),
             base_instructions.clone(),
         );
+        let external_claims = sess
+            .external_input_claim(&prompt.input)
+            .await
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        client_session.set_external_input_attempt(!external_claims.is_empty());
         let responses_metadata = sess
             .responses_metadata(step_context.as_ref(), CodexResponsesRequestKind::Turn)
             .await;
@@ -1684,12 +1708,30 @@ async fn run_sampling_request(
             &responses_metadata,
             Arc::clone(&turn_diff_tracker),
             &prompt,
+            &external_claims,
             cancellation_token.child_token(),
         )
         .await
         {
-            Ok(output) => {
+            Ok(mut output) => {
+                sess.finish_external_input_attempt(
+                    &external_claims,
+                    output.response_completed.then_some(output.output_observed),
+                )
+                .await
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+                if !external_claims.is_empty()
+                    && (!output.response_completed || !output.output_observed)
+                {
+                    output.needs_follow_up = false;
+                }
                 return Ok((output, original_input.unwrap_or(prompt.input)));
+            }
+            Err(err) if !external_claims.is_empty() => {
+                sess.finish_external_input_attempt(&external_claims, None)
+                    .await
+                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+                return Err(err);
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
@@ -1727,6 +1769,8 @@ async fn run_sampling_request(
         if preempt.is_cancelled() {
             return Ok((
                 SamplingRequestResult {
+                    response_completed: false,
+                    output_observed: false,
                     needs_follow_up: true,
                     last_agent_message: None,
                 },
@@ -1874,6 +1918,8 @@ pub(crate) async fn built_tools(
 
 #[derive(Debug)]
 struct SamplingRequestResult {
+    response_completed: bool,
+    output_observed: bool,
     needs_follow_up: bool,
     last_agent_message: Option<String>,
 }
@@ -2057,6 +2103,7 @@ pub(super) enum RealtimeEventText {
 
 pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventText> {
     match msg {
+        EventMsg::PresentationAppended(_) => None,
         EventMsg::ElicitationRequest(request)
             if matches!(
                 &request.request,
@@ -2525,6 +2572,7 @@ async fn try_run_sampling_request(
     responses_metadata: &CodexResponsesMetadata,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
+    external_claims: &[(String, uuid::Uuid)],
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -2574,6 +2622,7 @@ async fn try_run_sampling_request(
         return Err(CodexErr::TurnAborted);
     }
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
+    let mut output_observed = false;
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2642,6 +2691,8 @@ async fn try_run_sampling_request(
                 // TODO: Reconcile any response item already being presented to the client.
                 drop(stream);
                 break Ok(SamplingRequestResult {
+                    response_completed: false,
+                    output_observed,
                     needs_follow_up: true,
                     last_agent_message,
                 });
@@ -2673,6 +2724,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::OutputItemDone(mut item) => {
+                output_observed = true;
                 assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
                 sess.reserve_assistant_message_order(&turn_context, &item)
                     .await;
@@ -2740,6 +2792,8 @@ async fn try_run_sampling_request(
                     cancellation_token: cancellation_token.child_token(),
                 };
 
+                // TODO: Allow mailbox preemption after PartialAnswer and keep delivery open
+                // in the completed-item deferral predicates.
                 let preempt_for_mailbox_mail = match &item {
                     ResponseItem::Message { role, phase, .. } => {
                         role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
@@ -2788,6 +2842,8 @@ async fn try_run_sampling_request(
                     && sess.input_queue.has_pending_mailbox_items().await
                 {
                     break Ok(SamplingRequestResult {
+                        response_completed: false,
+                        output_observed,
                         needs_follow_up: true,
                         last_agent_message,
                     });
@@ -2934,6 +2990,11 @@ async fn try_run_sampling_request(
                 usage_metadata,
                 end_turn,
             } => {
+                // The model response is complete even if its tool futures are
+                // still awaiting approval. Record that observation before drain.
+                sess.finish_external_input_attempt(external_claims, Some(output_observed))
+                    .await
+                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
                 sess.services
                     .analytics_events_client
                     .track_code_mode_tool_call(
@@ -2974,6 +3035,8 @@ async fn try_run_sampling_request(
                     needs_follow_up = true;
                 }
                 break Ok(SamplingRequestResult {
+                    response_completed: true,
+                    output_observed,
                     needs_follow_up,
                     last_agent_message,
                 });

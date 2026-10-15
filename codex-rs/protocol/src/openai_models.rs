@@ -408,6 +408,9 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guardian: Option<GuardianModelPolicy>,
     pub slug: String,
+    /// Upstream request model for a local named configuration. Selection and persistence use `slug`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_model: Option<String>,
     pub display_name: String,
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,6 +514,11 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    /// Model identifier sent to inference endpoints, independently of the local selection name.
+    pub fn request_model(&self) -> &str {
+        self.request_model.as_deref().unwrap_or(&self.slug)
+    }
+
     pub fn resolved_context_window(&self) -> Option<i64> {
         self.context_window.or(self.max_context_window)
     }
@@ -1093,6 +1101,7 @@ mod tests {
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
+            request_model: None,
             used_fallback_model_metadata: false,
             supports_search_tool: false,
             supports_experimental_context: false,

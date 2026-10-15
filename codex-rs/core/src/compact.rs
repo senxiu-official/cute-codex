@@ -354,7 +354,11 @@ async fn run_compact_task_inner_impl(
         get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default()
     };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let user_messages = collect_annotated_user_messages(history_items);
+    let retained_external_inputs = sess
+        .external_input_items_retained_by_compaction(&turn_context.sub_id)
+        .await;
+    let user_messages =
+        collect_annotated_compaction_inputs(history_items, &retained_external_inputs);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
     if let Some(summary_item) = new_history.last_mut() {
@@ -556,6 +560,84 @@ pub(crate) fn collect_annotated_user_messages(
         .collect()
 }
 
+/// Like [`collect_annotated_user_messages`], but also keeps the canonical ExternalInput items
+/// that compaction must retain (see `Session::external_input_items_retained_by_compaction`), in
+/// history order. Retained external items are never truncated: they are kept whole or dropped.
+pub(crate) fn collect_annotated_compaction_inputs<'a>(
+    items: &'a [ResponseItemEnvelope],
+    retained_external_inputs: &'a [ResponseItem],
+) -> Vec<CompactedUserMessage<'a>> {
+    items
+        .iter()
+        .filter_map(|envelope| {
+            if let Some(canonical) =
+                retained_external_input(&envelope.item, retained_external_inputs)
+            {
+                return Some(CompactedUserMessage {
+                    message: external_input_text(canonical)
+                        .unwrap_or_default()
+                        .to_string(),
+                    original: canonical,
+                    harness_metadata: envelope.metadata.as_ref(),
+                });
+            }
+            compacted_user_message(&envelope.item, envelope.metadata.as_ref())
+        })
+        .collect()
+}
+
+/// cutex delivers inputs (delegation asks, agent messages) as canonical ExternalInput items:
+/// standalone `external_event` function outputs in the `external` namespace.
+pub(crate) fn is_external_input_item(item: &ResponseItem) -> bool {
+    matches!(
+        item,
+        ResponseItem::FunctionCallOutput {
+            call_id: None,
+            name: Some(name),
+            namespace: Some(namespace),
+            ..
+        } if name == "external_event" && namespace == "external"
+    )
+}
+
+fn external_input_text(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. } if is_external_input_item(item) => {
+            output.text_content()
+        }
+        _ => None,
+    }
+}
+
+/// Returns the canonical copy of `item` when it is an ExternalInput item compaction retains.
+/// Matches by item id, or by exact output when the id is absent; the canonical copy replaces a
+/// history copy that context-window trimming may have shortened.
+pub(crate) fn retained_external_input<'a>(
+    item: &ResponseItem,
+    retained_external_inputs: &'a [ResponseItem],
+) -> Option<&'a ResponseItem> {
+    let ResponseItem::FunctionCallOutput { id, output, .. } = item else {
+        return None;
+    };
+    if !is_external_input_item(item) {
+        return None;
+    }
+    retained_external_inputs.iter().find(|canonical| {
+        let ResponseItem::FunctionCallOutput {
+            id: canonical_id,
+            output: canonical_output,
+            ..
+        } = canonical
+        else {
+            return false;
+        };
+        match (id, canonical_id) {
+            (Some(id), Some(canonical_id)) => id == canonical_id,
+            _ => output == canonical_output,
+        }
+    })
+}
+
 fn compacted_user_message<'a>(
     item: &'a ResponseItem,
     harness_metadata: Option<&'a CodexHarnessMetadata>,
@@ -602,6 +684,11 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
                     if text.starts_with("Message Type: FINAL_ANSWER\n")
             )
         {
+            last_real_user_index = Some(i);
+            break;
+        }
+        // A retained ExternalInput item is the turn's real input (cutex ask or message).
+        if is_external_input_item(&item.item) {
             last_real_user_index = Some(i);
             break;
         }
@@ -673,6 +760,17 @@ fn build_compacted_history_with_limit(
                 break;
             }
             let tokens = approx_token_count(&message.message);
+            if is_external_input_item(message.original) {
+                // Canonical external input must stay byte-identical to its ledger entry.
+                if tokens <= remaining {
+                    selected_messages.push(ResponseItemEnvelope {
+                        item: message.original.clone(),
+                        metadata: message.harness_metadata.cloned(),
+                    });
+                    remaining = remaining.saturating_sub(tokens);
+                }
+                continue;
+            }
             let ResponseItem::Message {
                 id,
                 content,

@@ -12,10 +12,10 @@ expression: "render_lines(&view, 100)"
   ───────────────────────                                                                           
   [x] thread-credits         Estimated current-thread credits (Enterprise workspaces only; omitted …
   [x] estimated-thread-cost  Estimated current-thread cost in USD (Enterprise workspaces only; omit…
-  [ ] model                  Current model name                                                     
-  [ ] model-with-reasoning   Current model name with reasoning level                                
-  [ ] reasoning              Current reasoning level                                                
-  [ ] current-dir            Current working directory                                              
+  [ ] C+ Notification        Cutex notification priority (Alt+N to cycle)                           
+  [ ] C+ Working Directory   Working directory with configurable display aliases                    
+  [ ] C+ Agent Name          Agent name and assigned project badge                                  
+  [ ] C+ Context Remaining   Remaining context percentage                                           
 ↓                                                                                                   
   5.2 credits · ~$1.82                                                                              
   space toggle · ←/→ reorder · enter save · esc cancel

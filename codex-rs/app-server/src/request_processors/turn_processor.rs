@@ -275,6 +275,38 @@ impl TurnRequestProcessor {
         result.map(|response| response.map(Into::into))
     }
 
+    /// ExternalInput owner stop of one turn. Unlike `turn/interrupt`, this
+    /// leaves the external-input gate open; it responds once the turn aborts.
+    /// The caller has already checked the launch binding.
+    pub(crate) async fn turn_interrupt_keeping_external_input(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread_id: &str,
+        turn_id: String,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let (thread_uuid, thread) = self.load_thread(thread_id).await?;
+        let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+        thread_state
+            .lock()
+            .await
+            .pending_interrupts
+            .push(request_id.clone());
+        self.outgoing
+            .record_request_turn_id(request_id, &turn_id)
+            .await;
+        if thread.interrupt_turn_keeping_external_input(&turn_id).await {
+            return Ok(None);
+        }
+        thread_state
+            .lock()
+            .await
+            .pending_interrupts
+            .retain(|pending_request_id| pending_request_id != request_id);
+        let error = invalid_request(format!("turn {turn_id} is not active"));
+        self.track_error_response(request_id, &error, /*error_type*/ None);
+        Err(error)
+    }
+
     pub(crate) async fn thread_realtime_start(
         &self,
         request_id: &ConnectionRequestId,
@@ -1145,6 +1177,7 @@ impl TurnRequestProcessor {
                     ),
                     NotSubmittedReason::PendingTriggerTurn
                     | NotSubmittedReason::PlanMode
+                    | NotSubmittedReason::Interrupted
                     | NotSubmittedReason::Superseded => (
                         "no active turn to steer".to_string(),
                         None,
@@ -1633,6 +1666,7 @@ impl TurnRequestProcessor {
 
         // Submit the interrupt. Turn interrupts respond upon TurnAborted; startup
         // interrupts respond here because startup cancellation has no turn event.
+        // Core closes the dispatch gate and cancels even if gate persistence fails.
         match self
             .submit_core_op(request_id, thread.as_ref(), Op::Interrupt)
             .await
@@ -1668,6 +1702,7 @@ impl TurnRequestProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
+            thread_unload_enabled: self.config.thread_unload_enabled,
             skills_watcher: Arc::clone(&self.skills_watcher),
             turn_cost_worker: self.turn_cost_worker.clone(),
         }

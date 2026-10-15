@@ -7,6 +7,29 @@ use serde_json::json;
 use std::collections::BTreeSet;
 
 #[test]
+fn model_variants_preserve_requirements_for_local_and_upstream_models() {
+    let mut model = test_model();
+    model.slug = "Astra [285K]".to_string();
+    model.request_model = Some("gpt-6-astra".to_string());
+    for protected in [&model.slug, model.request_model.as_ref().unwrap()] {
+        let requirements = ConfigRequirements {
+            auto_review_required_models: Some(Sourced::new(
+                BTreeSet::from([protected.clone()]),
+                RequirementSource::Unknown,
+            )),
+            ..Default::default()
+        };
+        assert!(requirements.auto_review_required_for_model_info(&model));
+        let mut policy: GuardianModelPolicy =
+            serde_json::from_value(json!({"shell": "adaptive"})).unwrap();
+        let mut expected = policy.clone();
+        expected.disable_scoring();
+        requirements.constrain_guardian_policy_for_model_info(&mut policy, &model);
+        assert_eq!(policy, expected);
+    }
+}
+
+#[test]
 fn explicit_catalog_policy_preserves_precedence_over_the_legacy_switch() {
     let catalog: GuardianModelPolicy = serde_json::from_value(json!({
         "computer_use": "adaptive", "shell": "disabled"

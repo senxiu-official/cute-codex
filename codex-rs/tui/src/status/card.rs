@@ -91,6 +91,13 @@ impl StatusHistoryHandle {
             .to_string()
     }
 
+    pub(crate) fn finish_provider_rate_limits(&self, data: StatusRateLimitData) {
+        if let Ok(mut state) = self.card.rate_limit_state.write() {
+            state.rate_limits = data;
+            state.refreshing_rate_limits = false;
+        }
+    }
+
     pub(crate) fn reserve_thread_usage_label_width(&self) {
         self.card.thread_usage.reserve_label_width();
     }
@@ -360,7 +367,14 @@ impl StatusHistoryCell {
             None => (&default_usage, config.model_context_window),
         };
         let context_window = context_window.map(|window| StatusContextWindowData {
-            percent_remaining: context_usage.percent_of_context_window_remaining(window),
+            percent_remaining: if config.model_provider_id == "cute-claude" {
+                super::provider_limits::context_remaining(
+                    context_usage.tokens_in_context_window(),
+                    window,
+                )
+            } else {
+                context_usage.percent_of_context_window_remaining(window)
+            },
             tokens_in_context: context_usage.tokens_in_context_window(),
             window,
         });

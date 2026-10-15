@@ -1,0 +1,39 @@
+---
+source: tui/src/history_cell/separators_tests.rs
+assertion_line: 29
+expression: "snapshots.join(\"\\n\\n\")"
+---
+elapsed=None, width=64
+─ 14:32 ────────────────────────────────────────────────────────
+
+elapsed=None, width=20
+─ 14:32 ────────────
+
+elapsed=None, width=5
+─ 14:
+
+elapsed=None, width=0
+
+
+elapsed=Some(12), width=64
+─ 14:32 ────────────────────────────────────────────────────────
+
+elapsed=Some(12), width=20
+─ 14:32 ────────────
+
+elapsed=Some(12), width=5
+─ 14:
+
+elapsed=Some(12), width=0
+
+
+elapsed=Some(87), width=64
+─ 14:32 • Worked for 1m 27s ────────────────────────────────────
+
+elapsed=Some(87), width=20
+─ 14:32 • Worked for
+
+elapsed=Some(87), width=5
+─ 14:
+
+elapsed=Some(87), width=0

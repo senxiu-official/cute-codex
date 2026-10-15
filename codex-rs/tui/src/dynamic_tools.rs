@@ -1263,6 +1263,7 @@ fn turn_summary(turn: &Turn, include_outputs: bool, output_chars: usize) -> Valu
                 name,
                 namespace,
                 output,
+                ..
             } => {
                 let mut item = json!({
                     "type": "functionCallOutput", "id": id, "name": name, "namespace": namespace

@@ -43,6 +43,9 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 webbrowser = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["fs", "process"] }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 core_test_support = { workspace = true }

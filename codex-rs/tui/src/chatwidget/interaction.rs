@@ -58,6 +58,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) -> KeyEventAction {
+        if key_event.kind == KeyEventKind::Press
+            && key_event.modifiers == KeyModifiers::ALT
+            && key_event.code == KeyCode::Char('n')
+        {
+            self.refresh_notification_control(/*cycle*/ true);
+            return KeyEventAction::None;
+        }
         if self.handle_startup_submission_key(key_event) {
             return KeyEventAction::None;
         }

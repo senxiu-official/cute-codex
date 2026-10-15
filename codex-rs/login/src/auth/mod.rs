@@ -7,7 +7,9 @@ mod change_state;
 pub mod default_client;
 pub mod error;
 mod personal_access_token;
+mod selected_file;
 mod storage;
+pub use selected_file::configure_auth_file;
 mod util;
 mod workload_identity;
 
@@ -25,3 +27,5 @@ pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;
 pub use workload_identity::is_workload_identity_selected;
+
+pub use selected_file::explicit_auth_file_selected;

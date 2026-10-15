@@ -1430,6 +1430,59 @@
       ],
       "type": "string"
     },
+    "ExternalInputSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ExternalInputSourceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ExternalInputSourceKind": {
+      "enum": [
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ExternalInputStatusChangedNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ExternalInputView": {
+      "additionalProperties": false,
+      "properties": {
+        "data": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "schema"
+      ],
+      "type": "object"
+    },
     "FileChangeOutputDeltaNotification": {
       "description": "Deprecated legacy notification for `apply_patch` textual output.\n\nThe server no longer emits this notification.",
       "properties": {
@@ -3002,7 +3055,7 @@
       "type": "object"
     },
     "MessagePhase": {
-      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "description": "Classifies assistant text as commentary, a partial answer, or a terminal answer.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
         {
           "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
@@ -3012,7 +3065,14 @@
           "type": "string"
         },
         {
-          "description": "The assistant's terminal answer text for the current turn.",
+          "description": "Stable answer text that may be followed by more assistant output or tools.",
+          "enum": [
+            "partial_answer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's declared terminal answer text for the current turn.",
           "enum": [
             "final_answer"
           ],
@@ -3341,6 +3401,127 @@
         "edu_plus",
         "edu_pro",
         "unknown"
+      ],
+      "type": "string"
+    },
+    "Presentation": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "default": "",
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/definitions/PresentationFormat"
+        },
+        "id": {
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/definitions/PresentationReference"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalInputSource"
+        },
+        "title": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "id",
+        "references",
+        "source"
+      ],
+      "type": "object"
+    },
+    "PresentationAppended": {
+      "additionalProperties": false,
+      "properties": {
+        "originThreadId": {
+          "type": "string"
+        },
+        "ownerId": {
+          "type": "string"
+        },
+        "presentation": {
+          "$ref": "#/definitions/Presentation"
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "semanticSha256": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "originThreadId",
+        "ownerId",
+        "presentation",
+        "receiptId",
+        "semanticSha256",
+        "version"
+      ],
+      "type": "object"
+    },
+    "PresentationAppendedNotification": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/PresentationAppended"
+        },
+        "position": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "position",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "PresentationFormat": {
+      "enum": [
+        "plainText",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "PresentationReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/PresentationReferenceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PresentationReferenceKind": {
+      "enum": [
+        "externalInput",
+        "mcpInvocation"
       ],
       "type": "string"
     },
@@ -4724,6 +4905,17 @@
         },
         {
           "properties": {
+            "externalInputView": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExternalInputView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "id": {
               "type": "string"
             },
@@ -6179,6 +6371,15 @@
     },
     "ThreadTokenUsage": {
       "properties": {
+        "compactionCount": {
+          "description": "Number of completed auto-compact windows. Absent for runtimes that do not provide an authoritative count.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "last": {
           "$ref": "#/definitions/TokenUsageBreakdown"
         },
@@ -7164,6 +7365,46 @@
         "params"
       ],
       "title": "Thread/goal/clearedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/presentation/appended"
+          ],
+          "title": "Thread/presentation/appendedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PresentationAppendedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/presentation/appendedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/externalInput/statusChanged"
+          ],
+          "title": "Thread/externalInput/statusChangedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExternalInputStatusChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/externalInput/statusChangedNotification",
       "type": "object"
     },
     {

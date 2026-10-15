@@ -56,7 +56,7 @@ impl LocalSettings {
         } else {
             config.animations
         };
-        Self {
+        let mut settings = Self {
             transcript_mode: TranscriptMode::resolve(
                 config.tui_fullscreen_transcript,
                 config.tui_alternate_screen != codex_config::types::AltScreenMode::Never,
@@ -102,7 +102,11 @@ impl LocalSettings {
                 .get_user_config_file()
                 .cloned()
                 .unwrap_or_else(|| config.codex_home.join("config.toml")),
+        };
+        if let Err(error) = crate::app::status_preferences::reload(&mut settings.tui) {
+            tracing::warn!(%error, "Failed to load shared status line preferences");
         }
+        settings
     }
 }
 

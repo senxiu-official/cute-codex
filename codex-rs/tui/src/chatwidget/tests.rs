@@ -194,7 +194,9 @@ macro_rules! assert_chatwidget_snapshot {
         settings.set_prepend_module_to_snapshot(false);
         settings.set_snapshot_path(crate::chatwidget::tests::chatwidget_snapshot_dir());
         settings.bind(|| {
-            insta::assert_snapshot!(format!("codex_tui__chatwidget__tests__{}", $name), $value);
+            let value = regex_lite::Regex::new(r"─ [0-9]{2}:[0-9]{2}").unwrap()
+                .replace_all(&($value).to_string(), "─ HH:MM").into_owned();
+            insta::assert_snapshot!(format!("codex_tui__chatwidget__tests__{}", $name), value);
         });
     }};
     ($name:expr, $value:expr, @$snapshot:literal $(,)?) => {{
@@ -202,6 +204,8 @@ macro_rules! assert_chatwidget_snapshot {
         settings.set_prepend_module_to_snapshot(false);
         settings.set_snapshot_path(crate::chatwidget::tests::chatwidget_snapshot_dir());
         settings.bind(|| {
+            let value = regex_lite::Regex::new(r"─ [0-9]{2}:[0-9]{2}").unwrap()
+                .replace_all(&($value).to_string(), "─ HH:MM").into_owned();
             insta::assert_snapshot!(
                 format!("codex_tui__chatwidget__tests__{}", $name),
                 $value,
@@ -233,6 +237,8 @@ mod approval_requests;
 mod backend_banners_tests;
 #[path = "tests/bedrock_catalog_tests.rs"]
 mod bedrock_catalog_tests;
+#[path = "tests/claude_tools_tests.rs"]
+mod claude_tools_tests;
 #[path = "tests/collaboration_catalog_tests.rs"]
 mod collaboration_catalog_tests;
 #[path = "tests/compaction_tests.rs"]
@@ -246,6 +252,8 @@ mod computer_activity_tests;
 mod config_errors;
 #[path = "tests/copy_export_picker_tests.rs"]
 mod copy_export_picker_tests;
+#[path = "tests/cutex_presentation_tests.rs"]
+mod cutex_presentation;
 #[path = "tests/dynamic_activity_tests.rs"]
 mod dynamic_activity_tests;
 mod exec_flow;
@@ -310,6 +318,10 @@ pub(crate) use helpers::set_chatgpt_auth;
 pub(crate) use helpers::set_fast_mode_test_catalog;
 pub(super) use helpers::*;
 
+#[path = "tests/inbound_presentation_tests.rs"]
+mod inbound_presentation;
+#[path = "tests/presentation_tests.rs"]
+mod presentation;
 #[path = "tests/questions_tests.rs"]
 mod questions_tests;
 

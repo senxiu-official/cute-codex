@@ -3409,3 +3409,70 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     bedrock_with_standalone_web_search.assert_visible_contains(&["web_search"]);
     bedrock_with_standalone_web_search.assert_visible_lacks(&["web"]);
 }
+
+/// Every built-in tool the model can see, with every feature switched on (in
+/// a few combinations, since some features hide others), keeps each `enum`
+/// next to one `type` shared by all of its values. Strict function-declaration
+/// dialects (Google via OpenAI-compatible gateways) refuse anything else, and
+/// these schemas are sent unchanged unless `tool_schema_compat = "strict"`.
+#[tokio::test]
+async fn builtin_tool_schemas_pass_strict_enum_rules_with_all_features() {
+    let hidden_by = [
+        vec![],
+        vec![Feature::CodeModeOnly, Feature::JsReplToolsOnly],
+        vec![
+            Feature::CodeMode,
+            Feature::CodeModeOnly,
+            Feature::JsReplToolsOnly,
+            Feature::MultiAgentV2,
+        ],
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    let mut violations = Vec::new();
+    for disabled in hidden_by {
+        for web_search in [WebSearchMode::Live, WebSearchMode::Disabled] {
+            let disabled = disabled.clone();
+            let probe = probe_with(
+                move |turn| {
+                    for spec in codex_features::FEATURES {
+                        let mut config = (*turn.config).clone();
+                        if config.features.enable(spec.id).is_ok() {
+                            turn.multi_agent_version = config.multi_agent_version_from_features();
+                            turn.config = Arc::new(config);
+                        }
+                    }
+                    for feature in &disabled {
+                        let mut config = (*turn.config).clone();
+                        if config.features.disable(*feature).is_ok() {
+                            turn.multi_agent_version = config.multi_agent_version_from_features();
+                            turn.config = Arc::new(config);
+                        }
+                    }
+                    update_config(turn, |config| {
+                        let _ = config.web_search_mode.set(web_search);
+                    });
+                },
+                ToolPlanInputs {
+                    tool_suggest_candidates: Some(plugin_candidates(
+                        ToolSuggestPresentation::ListTool,
+                    )),
+                    dynamic_tools: vec![dynamic_tool(Some("dyn"), "probe", false)],
+                    ..ToolPlanInputs::default()
+                },
+            )
+            .await;
+            for spec in &probe.visible_specs {
+                seen.insert(spec.name().to_string());
+                violations.extend(codex_tools::tool_spec_strict_violations(spec));
+            }
+        }
+    }
+    assert!(seen.len() >= 10, "too few tools probed: {seen:?}");
+    violations.sort();
+    violations.dedup();
+    assert!(
+        violations.is_empty(),
+        "built-in tools {seen:?} have strict enum violations:\n{}",
+        violations.join("\n")
+    );
+}

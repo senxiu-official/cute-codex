@@ -7521,6 +7521,277 @@
       ],
       "type": "string"
     },
+    "ExternalInputAdmission": {
+      "description": "How a submitted item may start or join a turn.",
+      "oneOf": [
+        {
+          "description": "Pending until a safe input boundary; idle threads start an automatic turn.",
+          "enum": [
+            "queue"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Start a dedicated turn now, or fail with `busy` and queue nothing. The turn consumes this item, passive input, and no other active item. Requires an active delivery.",
+          "enum": [
+            "exclusive_turn"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ExternalInputDelivery": {
+      "enum": [
+        "after_turn",
+        "passive",
+        "soon"
+      ],
+      "type": "string"
+    },
+    "ExternalInputDeliveryState": {
+      "enum": [
+        "unknown",
+        "pending",
+        "context_persisted",
+        "conflict",
+        "retryable_error"
+      ],
+      "type": "string"
+    },
+    "ExternalInputHoldReason": {
+      "enum": [
+        "canonical_size_policy",
+        "plan_mode",
+        "interrupted",
+        "request_uncertain",
+        "no_output",
+        "context_missing"
+      ],
+      "type": "string"
+    },
+    "ExternalInputMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/definitions/ExternalInputDelivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalInputSource"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delivery",
+        "id",
+        "source",
+        "text",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ExternalInputMessageKey": {
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "semanticSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "semanticSha256"
+      ],
+      "type": "object"
+    },
+    "ExternalInputProcessingState": {
+      "enum": [
+        "none",
+        "pending",
+        "claimed",
+        "output_observed",
+        "held"
+      ],
+      "type": "string"
+    },
+    "ExternalInputProcessingStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExternalInputHoldReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/ExternalInputProcessingState"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "ExternalInputReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "ordinal": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "ownerId": {
+          "type": "string"
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "responseItemId": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "semanticSha256": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "ordinal",
+        "ownerId",
+        "receiptId",
+        "responseItemId",
+        "schema",
+        "semanticSha256",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ExternalInputRetryDisposition": {
+      "enum": [
+        "released"
+      ],
+      "type": "string"
+    },
+    "ExternalInputSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ExternalInputSourceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ExternalInputSourceKind": {
+      "enum": [
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ExternalInputStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "deliveryState": {
+          "$ref": "#/definitions/ExternalInputDeliveryState"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "processing": {
+          "$ref": "#/definitions/ExternalInputProcessingStatus"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExternalInputReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "semanticSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deliveryState",
+        "messageId",
+        "processing",
+        "semanticSha256"
+      ],
+      "type": "object"
+    },
+    "ExternalInputStatusChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "threadId"
+      ],
+      "title": "ExternalInputStatusChangedNotification",
+      "type": "object"
+    },
+    "ExternalInputView": {
+      "additionalProperties": false,
+      "properties": {
+        "data": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "schema"
+      ],
+      "type": "object"
+    },
     "FeedbackRequirements": {
       "properties": {
         "enabled": {
@@ -11289,7 +11560,7 @@
       "type": "string"
     },
     "MessagePhase": {
-      "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+      "description": "Classifies assistant text as commentary, a partial answer, or a terminal answer.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
         {
           "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
@@ -11299,7 +11570,14 @@
           "type": "string"
         },
         {
-          "description": "The assistant's terminal answer text for the current turn.",
+          "description": "Stable answer text that may be followed by more assistant output or tools.",
+          "enum": [
+            "partial_answer"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The assistant's declared terminal answer text for the current turn.",
           "enum": [
             "final_answer"
           ],
@@ -13652,6 +13930,129 @@
         "pluginNames"
       ],
       "type": "object"
+    },
+    "Presentation": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "default": "",
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/definitions/PresentationFormat"
+        },
+        "id": {
+          "type": "string"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/definitions/PresentationReference"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalInputSource"
+        },
+        "title": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format",
+        "id",
+        "references",
+        "source"
+      ],
+      "type": "object"
+    },
+    "PresentationAppended": {
+      "additionalProperties": false,
+      "properties": {
+        "originThreadId": {
+          "type": "string"
+        },
+        "ownerId": {
+          "type": "string"
+        },
+        "presentation": {
+          "$ref": "#/definitions/Presentation"
+        },
+        "receiptId": {
+          "type": "string"
+        },
+        "semanticSha256": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "originThreadId",
+        "ownerId",
+        "presentation",
+        "receiptId",
+        "semanticSha256",
+        "version"
+      ],
+      "type": "object"
+    },
+    "PresentationAppendedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/PresentationAppended"
+        },
+        "position": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "position",
+        "threadId"
+      ],
+      "title": "PresentationAppendedNotification",
+      "type": "object"
+    },
+    "PresentationFormat": {
+      "enum": [
+        "plainText",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "PresentationReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/PresentationReferenceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PresentationReferenceKind": {
+      "enum": [
+        "externalInput",
+        "mcpInvocation"
+      ],
+      "type": "string"
     },
     "ProcessExitedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -16284,6 +16685,46 @@
             "params"
           ],
           "title": "Thread/goal/clearedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/presentation/appended"
+              ],
+              "title": "Thread/presentation/appendedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PresentationAppendedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/presentation/appendedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/externalInput/statusChanged"
+              ],
+              "title": "Thread/externalInput/statusChangedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ExternalInputStatusChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/externalInput/statusChangedNotification",
           "type": "object"
         },
         {
@@ -19553,6 +19994,17 @@
         },
         {
           "properties": {
+            "externalInputView": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ExternalInputView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "id": {
               "type": "string"
             },
@@ -22374,6 +22826,32 @@
         {
           "properties": {
             "item": {
+              "$ref": "#/definitions/PresentationAppended"
+            },
+            "position": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "presentation"
+              ],
+              "title": "PresentationThreadTimelineEntryType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item",
+            "position",
+            "type"
+          ],
+          "title": "PresentationThreadTimelineEntry",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "item": {
               "$ref": "#/definitions/ThreadItem"
             },
             "position": {
@@ -22525,6 +23003,15 @@
     },
     "ThreadTokenUsage": {
       "properties": {
+        "compactionCount": {
+          "description": "Number of completed auto-compact windows. Absent for runtimes that do not provide an authoritative count.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "last": {
           "$ref": "#/definitions/TokenUsageBreakdown"
         },

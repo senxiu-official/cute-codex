@@ -138,6 +138,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
 }
 
 pub(crate) struct MessageProcessor {
+    external_input_processor: crate::request_processors::ExternalInputRequestProcessor,
     pub(crate) turn_admission: TurnAdmission,
     user_verification: Arc<crate::user_verification::Service>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -245,6 +246,7 @@ impl ConnectionSessionState {
 }
 
 pub(crate) struct MessageProcessorArgs {
+    pub(crate) external_input_binding: Option<crate::external_input_binding::ExternalInputBinding>,
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) arg0_paths: Arg0DispatchPaths,
@@ -271,6 +273,7 @@ impl MessageProcessor {
     /// `Sender` so handlers can enqueue messages to be written to stdout.
     pub(crate) fn new(args: MessageProcessorArgs) -> Self {
         let MessageProcessorArgs {
+            external_input_binding,
             outgoing,
             analytics_events_client,
             arg0_paths,
@@ -369,11 +372,25 @@ impl MessageProcessor {
                     thread_state_manager.clone(),
                 )),
             );
+            let manager = match external_input_binding.as_ref() {
+                Some(binding) => manager.with_external_input_owner(
+                    binding.owner_id.clone(),
+                    binding.thread_id.clone(),
+                    binding.canonical_byte_limit,
+                ),
+                None => manager,
+            };
             match code_mode_session_provider {
                 Some(provider) => manager.with_code_mode_session_provider(provider),
                 None => manager,
             }
         });
+        let external_input_processor =
+            crate::request_processors::ExternalInputRequestProcessor::new(
+                external_input_binding.clone(),
+                Arc::clone(&thread_manager),
+                Arc::clone(&outgoing),
+            );
         let model_catalog = Arc::new(crate::model_catalog::ModelCatalog::new(
             config_manager.clone(),
             Arc::clone(&config),
@@ -461,6 +478,11 @@ impl MessageProcessor {
             config_warnings.clone(),
             rpc_transport,
             Arc::clone(&user_verification),
+        )
+        .with_external_input_version(
+            external_input_binding
+                .as_ref()
+                .map(|binding| binding.version),
         );
         let marketplace_processor = MarketplaceRequestProcessor::new(
             Arc::clone(&config),
@@ -608,6 +630,7 @@ impl MessageProcessor {
             search_processor,
             thread_goal_processor,
             thread_queue_processor,
+            external_input_processor,
             thread_processor,
             turn_processor,
             windows_sandbox_processor,
@@ -1354,6 +1377,66 @@ impl MessageProcessor {
                 self.thread_goal_processor
                     .thread_goal_clear(request_id.clone(), params)
                     .await
+            }
+            ClientRequest::ThreadPresentationAppend { params, .. } => self
+                .external_input_processor
+                .presentation_append(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadPresentationStatus { params, .. } => self
+                .external_input_processor
+                .presentation_status(params)
+                .await
+                .map(|response| {
+                    Some(
+                        codex_app_server_protocol::ClientResponsePayload::ThreadPresentationStatus(
+                            response,
+                        ),
+                    )
+                }),
+            ClientRequest::ThreadExternalInputSubmit { params, .. } => self
+                .external_input_processor
+                .submit(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadExternalInputStatus { params, .. } => self
+                .external_input_processor
+                .status(params)
+                .await
+                .map(|response| {
+                    Some(
+                        codex_app_server_protocol::ClientResponsePayload::ThreadExternalInputStatus(
+                            response,
+                        ),
+                    )
+                }),
+            ClientRequest::ThreadExternalInputRetry { params, .. } => self
+                .external_input_processor
+                .retry(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadExternalInputResume { params, .. } => self
+                .external_input_processor
+                .resume(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadExternalInputInterrupt { params, .. } => {
+                match self
+                    .external_input_processor
+                    .check_interrupt_binding(&params)
+                    .await
+                {
+                    Ok(()) => {
+                        self.turn_processor
+                            .turn_interrupt_keeping_external_input(
+                                &request_id,
+                                &params.thread_id,
+                                params.turn_id,
+                            )
+                            .await
+                    }
+                    Err(error) => Err(error),
+                }
             }
             ClientRequest::ThreadQueueAdd { params, .. } => self
                 .thread_queue_processor

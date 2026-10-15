@@ -34,15 +34,30 @@ enum StatusLineAccent {
 impl StatusLineAccent {
     fn for_item(item: StatusLineItem) -> Self {
         match item {
+            StatusLineItem::CutexWelcomeIndentation
+            | StatusLineItem::CutexSpace2
+            | StatusLineItem::CutexSpace4
+            | StatusLineItem::CutexSpace6
+            | StatusLineItem::CutexSpace8
+            | StatusLineItem::CutexSpace10
+            | StatusLineItem::CutexNewline
+            | StatusLineItem::Notification
+            | StatusLineItem::CutexAgentName
+            | StatusLineItem::CutexAlignedProfile
+            | StatusLineItem::CustomProfile
+            | StatusLineItem::CustomBonVoyage => Self::Metadata,
             StatusLineItem::ModelName
             | StatusLineItem::ModelWithReasoning
             | StatusLineItem::Reasoning => Self::Model,
-            StatusLineItem::CurrentDir | StatusLineItem::ProjectRoot => Self::Path,
+            StatusLineItem::CurrentDir
+            | StatusLineItem::CutexWorkdir
+            | StatusLineItem::ProjectRoot => Self::Path,
             StatusLineItem::GitBranch
             | StatusLineItem::PullRequestNumber
             | StatusLineItem::BranchChanges => Self::Branch,
             StatusLineItem::Status => Self::State,
             StatusLineItem::ContextRemaining
+            | StatusLineItem::CutexContextRemaining
             | StatusLineItem::ContextUsed
             | StatusLineItem::ContextWindowSize
             | StatusLineItem::UsedTokens
@@ -50,10 +65,20 @@ impl StatusLineAccent {
             | StatusLineItem::TotalOutputTokens
             | StatusLineItem::ThreadCredits
             | StatusLineItem::EstimatedThreadCost => Self::Usage,
-            StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
-            StatusLineItem::CodexVersion | StatusLineItem::Hostname | StatusLineItem::SessionId => {
-                Self::Metadata
-            }
+            StatusLineItem::FiveHourLimit
+            | StatusLineItem::WeeklyLimit
+            | StatusLineItem::CutexFiveHourLimit
+            | StatusLineItem::CutexWeeklyLimit
+            | StatusLineItem::CutexSimpleWeeklyLimit
+            | StatusLineItem::CutexSimpleFiveHourLimit
+            | StatusLineItem::CutexCustomizedLimit
+            | StatusLineItem::CutexCustomizedLimitBar
+            | StatusLineItem::CutexFableLimitBar
+            | StatusLineItem::CutexFableLimit => Self::Limit,
+            StatusLineItem::CodexVersion
+            | StatusLineItem::CutexVersion
+            | StatusLineItem::Hostname
+            | StatusLineItem::SessionId => Self::Metadata,
             StatusLineItem::FastMode | StatusLineItem::RawOutput => Self::Mode,
             StatusLineItem::Permissions => Self::Mode,
             StatusLineItem::ApprovalMode => Self::Mode,
@@ -101,6 +126,28 @@ where
     })
 }
 
+/// Apply the session-specific Cutex style without sharing mutable state across threads.
+pub(crate) fn status_line_with_notification_style(
+    segments: Vec<(StatusLineItem, String)>,
+    use_theme_colors: bool,
+    notification_style: Option<Style>,
+    thread_id: Option<ThreadId>,
+) -> Option<Line<'static>> {
+    let position = segments
+        .iter()
+        .position(|(item, _)| *item == StatusLineItem::Notification);
+    let ids: Vec<_> = segments.iter().map(|(id, _)| *id).collect();
+    let mut line = status_line_from_segments(segments, use_theme_colors, thread_id)?;
+    if let (Some(position), Some(style)) = (position, notification_style) {
+        line.spans[position * 2].style = style;
+    }
+    for (index, id) in ids.into_iter().enumerate() {
+        line.spans[index * 2].style =
+            crate::cutex_status_presentation::style(id, line.spans[index * 2].style);
+    }
+    Some(line)
+}
+
 fn status_line_from_segments_with_resolver<I, F>(
     segments: I,
     use_theme_colors: bool,
@@ -112,10 +159,18 @@ where
     F: Fn(StatusLineAccent) -> Option<Style>,
 {
     let mut spans = Vec::new();
+    let mut previous_spacing = false;
     for (item, text) in segments {
+        let spacing = super::status_line_layout::is_spacing(item);
         if !spans.is_empty() {
-            spans.push(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
+            // Keep the one separator span per boundary invariant used by styling/animation.
+            spans.push(if spacing || previous_spacing {
+                Span::raw("")
+            } else {
+                STATUS_LINE_SEPARATOR.set_style(secondary_text_style())
+            });
         }
+        previous_spacing = spacing;
         let style = if use_theme_colors
             && matches!(
                 item,
@@ -140,6 +195,7 @@ where
         } else {
             style
         };
+        let style = crate::custom_status_items::style(item).unwrap_or(style);
         let style = if item == StatusLineItem::PullRequestNumber {
             style.underlined()
         } else {

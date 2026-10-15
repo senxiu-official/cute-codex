@@ -1824,6 +1824,11 @@ pub struct ThreadTimelineListParams {
 )]
 #[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
 pub enum ThreadTimelineEntry {
+    Presentation {
+        #[ts(type = "number")]
+        position: u64,
+        item: codex_protocol::presentation::PresentationAppended,
+    },
     Item {
         #[ts(type = "number")]
         position: u64,
@@ -1921,6 +1926,11 @@ pub struct ThreadTokenUsage {
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
+    /// Number of completed auto-compact windows. Absent for runtimes that do
+    /// not provide an authoritative count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub compaction_count: Option<u64>,
 }
 
 impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
@@ -1929,6 +1939,7 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
             total: value.total_token_usage.into(),
             last: value.last_token_usage.into(),
             model_context_window: value.model_context_window,
+            compaction_count: None,
         }
     }
 }

@@ -264,6 +264,15 @@ impl Default for ConfigRequirements {
 }
 
 impl ConfigRequirements {
+    /// Named model configurations inherit requirements for both their local and upstream IDs.
+    pub fn auto_review_required_for_model_info(
+        &self,
+        model: &codex_protocol::openai_models::ModelInfo,
+    ) -> bool {
+        self.auto_review_required_for_model(&model.slug)
+            || self.auto_review_required_for_model(model.request_model())
+    }
+
     /// Returns whether a model slug or its supported provider alias requires auto-review.
     pub fn auto_review_required_for_model(&self, model: &str) -> bool {
         let Some(protected_models) = self.auto_review_required_models.as_ref() else {

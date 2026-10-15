@@ -713,6 +713,7 @@ mod tests {
         .await
         .unwrap();
         let model = codex_protocol::openai_models::ModelInfo {
+            request_model: None,
             used_fallback_model_metadata: false,
             ..model_info_from_slug("command-auth-model")
         };

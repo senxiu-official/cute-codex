@@ -54,6 +54,73 @@ fn text(buffer: &Buffer) -> String {
 }
 
 #[test]
+fn warning_notice_keeps_two_status_rows_and_shares_the_bottom_passive_row() {
+    let mut composer = composer();
+    composer.set_status_line_rows(vec![
+        Line::from("agent first row"),
+        Line::from("quota second row"),
+    ]);
+    let width = 80;
+    for separate_status_line in [true, false] {
+        for count in [0, 1] {
+            let options = composer.resolve_render_options(ComposerRenderOptions {
+                separate_status_line,
+                warning_count: count,
+                command_popup_placement: CommandPopupPlacement::Overlay,
+                ..Default::default()
+            });
+            let area = Rect::new(
+                /*x*/ 0,
+                /*y*/ 0,
+                width,
+                composer.desired_height_with_options(width, options),
+            );
+            let mut buffer = Buffer::empty(area);
+            composer.render_with_options(area, &mut buffer, /*mask_char*/ None, options);
+            let rows: Vec<String> = buffer
+                .content
+                .chunks(usize::from(width))
+                .map(|row| {
+                    row.iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned()
+                })
+                .collect();
+            let label = format!("separate={separate_status_line} count={count}");
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row.contains("agent first row"))
+                    .count(),
+                1,
+                "{label}"
+            );
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row.contains("quota second row"))
+                    .count(),
+                1,
+                "{label}: warning must not collapse the second status row"
+            );
+            let warning_rows: Vec<_> = rows
+                .iter()
+                .filter(|row| row.contains("1 warning"))
+                .collect();
+            assert_eq!(warning_rows.len(), usize::from(count > 0), "{label}");
+            if count > 0 && !separate_status_line {
+                // Inline status rides the passive footer; the warning shares its last row.
+                assert!(
+                    warning_rows[0].contains("quota second row"),
+                    "{label}: {}",
+                    warning_rows[0]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn warning_notice_styles() {
     let mut composer = composer();
     composer.set_text_content("keep this draft".into(), Vec::new(), Vec::new());

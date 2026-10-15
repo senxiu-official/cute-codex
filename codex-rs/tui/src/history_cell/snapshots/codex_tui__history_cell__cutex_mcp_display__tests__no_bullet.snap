@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell/cutex_mcp_display_tests.rs
+assertion_line: 90
+expression: "render(crate::history_cell::event_presentation::render_event(Some(\"Notice · workspace\"),&[\"Plain body\\u{1b}[31m\\nsecond line\".into()],None,24))"
+---
+Notice · workspace
+Plain body
+second line

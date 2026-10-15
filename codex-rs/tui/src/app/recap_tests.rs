@@ -1110,3 +1110,37 @@ async fn recap_failure_retries_once_for_the_same_turn_revision() {
         }
     }
 }
+
+#[test]
+fn durable_notice_is_excluded_from_recap_model_prompt() {
+    use codex_protocol::presentation::Presentation;
+    use codex_protocol::presentation::PresentationAppended;
+    use codex_protocol::presentation::PresentationFormat;
+    let mut record = PresentationAppended {
+        version: 1,
+        owner_id: "owner".into(),
+        origin_thread_id: "thread".into(),
+        presentation: Presentation {
+            id: "display".into(),
+            source: codex_protocol::external_input::Source {
+                kind: codex_protocol::external_input::SourceKind::Service,
+                id: "fixture".into(),
+            },
+            title: String::new(),
+            body: "DISPLAY_SENTINEL_NEVER_MODEL".into(),
+            format: PresentationFormat::PlainText,
+            references: vec![],
+        },
+        semantic_sha256: String::new(),
+        receipt_id: String::new(),
+    };
+    record.semantic_sha256 = record.semantic_digest();
+    record.receipt_id = record.receipt_digest();
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![
+        user_history_cell("Keep normal input"),
+        Arc::new(crate::history_cell::PresentationHistoryCell::new(record).unwrap()),
+    ];
+    let history = recap_history(&cells);
+    assert!(history.contains("Keep normal input"));
+    assert!(!history.contains("DISPLAY_SENTINEL_NEVER_MODEL"));
+}

@@ -43,6 +43,7 @@ use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::turn_input::TurnStartOptions;
+use codex_protocol::turn_input::TurnStartOrigin;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -53,6 +54,10 @@ use uuid::Uuid;
 #[cfg(test)]
 #[path = "turn_input_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "turn_input_origin_tests.rs"]
+mod origin_tests;
 
 /// Why input is starting a turn; shared by admission and input delivery.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +213,13 @@ pub(super) async fn handle(
     mode: TurnInputMode,
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
+    if matches!(request.input, SubmittedTurnInput::ExternalInput)
+        && (mode != TurnInputMode::StartIfIdle || !session.has_external_input_work().await)
+    {
+        return Err(CodexErr::InvalidRequest(
+            "no eligible external input reservation".into(),
+        ));
+    }
     match mode {
         TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
         TurnInputMode::StartIfIdle => {
@@ -215,7 +227,8 @@ pub(super) async fn handle(
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
                     TurnStartKind::User
                 }
-                SubmittedTurnInput::UserInput { .. }
+                SubmittedTurnInput::ExternalInput
+                | SubmittedTurnInput::UserInput { .. }
                 | SubmittedTurnInput::ResponseItem(_)
                 | SubmittedTurnInput::InterAgentCommunication(_) => TurnStartKind::Automatic,
             };
@@ -278,6 +291,7 @@ async fn start_or_steer(
     request: TurnInputRequest,
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
+    let explicit_origin = request.start_origin() == TurnStartOrigin::Explicit;
     let TurnInputRequest {
         mut input,
         thread_settings,
@@ -286,6 +300,8 @@ async fn start_or_steer(
         responsesapi_client_metadata,
         ..
     } = request;
+    let is_human = explicit_origin
+        && matches!(&input, SubmittedTurnInput::UserInput { content, .. } if !content.is_empty());
     let origin = UserInputOrigin::from_turn_trigger(start.turn_trigger.as_deref());
     let has_explicit_input = match &input {
         SubmittedTurnInput::UserInput { content, .. } => !content.is_empty(),
@@ -361,6 +377,12 @@ async fn start_or_steer(
                 task_input
                     .push(pending_turn_input(session, input, &turn_context.sub_id, origin).await);
             }
+            if is_human {
+                session
+                    .external_input_gate(false)
+                    .await
+                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+            }
             session
                 .spawn_task(turn_context, task_input, RegularTask::new())
                 .await;
@@ -372,10 +394,6 @@ async fn start_or_steer(
     }
 }
 
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "the previous turn check and idle reservation must be atomic"
-)]
 async fn start_if_idle(
     session: &Arc<Session>,
     request: TurnInputRequest,
@@ -383,6 +401,9 @@ async fn start_if_idle(
     kind: TurnStartKind,
     expected_previous_turn_id: Option<String>,
 ) -> CodexResult<TurnInputSubmission> {
+    let external_reservation = matches!(request.input, SubmittedTurnInput::ExternalInput);
+    let reservation_origin = request.start_origin();
+    let explicit_origin = reservation_origin == TurnStartOrigin::Explicit;
     let TurnInputRequest {
         input,
         thread_settings,
@@ -428,22 +449,19 @@ async fn start_if_idle(
         });
     }
 
-    let turn_state = {
-        let mut active_turn = session.active_turn.lock().await;
-        if active_turn.is_some() {
-            return Ok(TurnInputSubmission::NotSubmitted {
-                reason: NotSubmittedReason::NotIdle,
-            });
-        }
-        if let Some(expected) = expected_previous_turn_id
-            && session.state.lock().await.last_started_turn_id.as_ref() != Some(&expected)
-        {
-            return Ok(TurnInputSubmission::NotSubmitted {
-                reason: NotSubmittedReason::Superseded,
-            });
-        }
-        let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-        Arc::clone(&active_turn.turn_state)
+    let turn_state = match reserve_idle_turn(
+        session,
+        if external_reservation {
+            IdleReservation::ExternalInput
+        } else {
+            IdleReservation::Origin(reservation_origin)
+        },
+        expected_previous_turn_id.as_deref(),
+    )
+    .await
+    {
+        Ok(turn_state) => turn_state,
+        Err(reason) => return Ok(TurnInputSubmission::NotSubmitted { reason }),
     };
 
     if session.input_queue.has_trigger_turn_mailbox_items().await {
@@ -486,6 +504,13 @@ async fn start_if_idle(
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
         .await;
 
+    if kind == TurnStartKind::User
+        && explicit_origin
+        && let Err(error) = session.external_input_gate(false).await
+    {
+        session.clear_reserved_idle_turn(&turn_state).await;
+        return Err(CodexErr::InvalidRequest(error.to_string()));
+    }
     let mut task_input = merge_additional_context_input(session, additional_context).await;
     match kind {
         TurnStartKind::User => {
@@ -497,7 +522,10 @@ async fn start_if_idle(
         }
         TurnStartKind::Automatic | TurnStartKind::Recovery => {
             // Empty automatic user input resumes sampling without a new message.
-            if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
+            if !matches!(
+                &input,
+                SubmittedTurnInput::UserInput { .. } | SubmittedTurnInput::ExternalInput
+            ) {
                 session
                     .input_queue
                     .extend_pending_input_for_turn_state(
@@ -516,6 +544,99 @@ async fn start_if_idle(
     Ok(TurnInputSubmission::Started {
         turn_id: submission_id,
     })
+}
+
+/// Starts the automatic turn reserved by exclusive ExternalInput admission.
+/// Returns why the reservation was released instead, without starting a turn.
+pub(super) async fn start_reserved_external_input_turn(
+    session: &Arc<Session>,
+    turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
+    submission_id: String,
+) -> CodexResult<Option<NotSubmittedReason>> {
+    if session.input_queue.has_trigger_turn_mailbox_items().await {
+        session.clear_reserved_idle_turn(turn_state).await;
+        session.maybe_start_turn_for_pending_work().await;
+        return Ok(Some(NotSubmittedReason::PendingTriggerTurn));
+    }
+    let settings = PreparedTurnInputSettings::prepare(
+        session,
+        ThreadSettingsOverrides::default(),
+        TurnStartOptions::default(),
+    )
+    .await;
+    let started = match settings {
+        Ok(settings) => {
+            settings
+                .apply_started(session, submission_id, TurnStartKind::Automatic)
+                .await
+        }
+        Err(error) => Err(error),
+    };
+    let turn_context = match started {
+        Ok(Some(turn_context)) => turn_context,
+        Ok(None) => {
+            session.clear_reserved_idle_turn(turn_state).await;
+            return Ok(Some(NotSubmittedReason::PlanMode));
+        }
+        Err(error) => {
+            session.clear_reserved_idle_turn(turn_state).await;
+            return Err(error);
+        }
+    };
+    session
+        .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
+        .await;
+    let task_input = merge_additional_context_input(session, BTreeMap::new()).await;
+    session
+        .start_task(turn_context, task_input, RegularTask::new())
+        .await;
+    Ok(None)
+}
+
+enum IdleReservation {
+    Origin(TurnStartOrigin),
+    ExternalInput,
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the interruption gate and idle reservation must be one atomic decision"
+)]
+async fn reserve_idle_turn(
+    session: &Session,
+    reservation: IdleReservation,
+    expected_previous_turn_id: Option<&str>,
+) -> Result<Arc<tokio::sync::Mutex<TurnState>>, NotSubmittedReason> {
+    // Same order as external admission. An interrupt cannot slip between the
+    // gate check and active-turn reservation. No public payload chooses origin.
+    let external = session.external_input.lock().await;
+    if matches!(reservation, IdleReservation::ExternalInput)
+        && !external
+            .as_ref()
+            .is_some_and(crate::external_input::Runtime::has_dispatch_work)
+    {
+        return Err(NotSubmittedReason::Interrupted);
+    }
+    if matches!(
+        reservation,
+        IdleReservation::Origin(TurnStartOrigin::Automatic)
+    ) && external
+        .as_ref()
+        .is_some_and(|runtime| runtime.paused || runtime.poisoned)
+    {
+        return Err(NotSubmittedReason::Interrupted);
+    }
+    let mut active_turn = session.active_turn.lock().await;
+    if active_turn.is_some() {
+        return Err(NotSubmittedReason::NotIdle);
+    }
+    if let Some(expected) = expected_previous_turn_id
+        && session.state.lock().await.last_started_turn_id.as_deref() != Some(expected)
+    {
+        return Err(NotSubmittedReason::Superseded);
+    }
+    let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+    Ok(Arc::clone(&active_turn.turn_state))
 }
 
 async fn steer(
@@ -741,6 +862,9 @@ async fn pending_turn_input(
     origin: UserInputOrigin,
 ) -> TurnInput {
     match input {
+        SubmittedTurnInput::ExternalInput => {
+            unreachable!("external reservation is consumed at the safe boundary")
+        }
         SubmittedTurnInput::UserInput { content, client_id } => TurnInput::UserInput {
             content,
             client_id,

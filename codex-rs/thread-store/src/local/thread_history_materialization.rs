@@ -38,6 +38,13 @@ async fn materialize_to_sqlite_with_state_db(
     rollout_path: &Path,
 ) -> ThreadStoreResult<()> {
     let projection_state = super::thread_history::projection_state(store, thread_id).await?;
+    let previous_offset = projection_state
+        .as_ref()
+        .map_or(0, |state| state.next_byte_offset);
+    let rebuilding = projection_state
+        .as_ref()
+        .is_some_and(|state| state.external_input_version < 4);
+    let projection_state = projection_state.filter(|state| state.external_input_version == 4);
     let start_offset = projection_state
         .as_ref()
         .map_or(0, |state| state.next_byte_offset);
@@ -65,8 +72,14 @@ async fn materialize_to_sqlite_with_state_db(
         expected_ordinal,
         thread_id,
         subagent_history_start_ordinal,
+        rebuilding,
     )
     .await?;
+    if rebuilding && next_offset < previous_offset {
+        return Err(ThreadStoreError::Internal {
+            message: "durable rollout shrank before index rebuild".into(),
+        });
+    }
     // Empty valid records can still consume bytes through blank complete lines.
     if projections.is_empty() && start_offset == next_offset {
         return Ok(());
@@ -88,6 +101,7 @@ async fn read_projection_steps(
     expected_ordinal: u64,
     thread_id: ThreadId,
     subagent_history_start_ordinal: Option<u64>,
+    rebuilding: bool,
 ) -> ThreadStoreResult<(Vec<RolloutProjectionStep>, u64)> {
     let path = rollout_path.to_path_buf();
     let file =
@@ -127,6 +141,7 @@ async fn read_projection_steps(
         .rposition(|byte| *byte == b'\n')
         .map_or(0, |index| index + 1);
     let mut projections = Vec::new();
+    let mut external = codex_app_server_protocol::ExternalInputProjection::default();
     let mut next_ordinal = expected_ordinal;
     let mut next_offset = start_offset;
     let mut line_start_offset = start_offset;
@@ -145,6 +160,23 @@ async fn read_projection_steps(
             line_start_offset = line_end_offset;
             continue;
         }
+        if codex_rollout::is_crash_residue_line(line_bytes) {
+            // Zero-filled range (possibly after a torn record prefix) left by a power loss during
+            // delayed allocation: skip it like a blank line. It is not a malformed record, so it
+            // never blocks external input.
+            warn!(
+                thread_id = %thread_id,
+                rollout_path = %rollout_path.display(),
+                line_start_byte_offset = line_start_offset,
+                line_end_byte_offset = line_end_offset,
+                expected_ordinal = next_ordinal,
+                "skipping crash residue (NUL bytes) rollout line during projection"
+            );
+            record_projection_anomaly(ProjectionAnomaly::CrashResidue);
+            next_offset = line_end_offset;
+            line_start_offset = line_end_offset;
+            continue;
+        }
         let value = match serde_json::from_slice::<serde_json::Value>(line_bytes) {
             Ok(value) => value,
             Err(err) => {
@@ -157,6 +189,11 @@ async fn read_projection_steps(
                     error = %err,
                     "skipping malformed rollout line during projection"
                 );
+                if rebuilding || external.is_pending() {
+                    return Err(ThreadStoreError::Internal {
+                        message: "unreadable history during external input projection".into(),
+                    });
+                }
                 record_projection_anomaly(ProjectionAnomaly::MalformedJson);
                 next_offset = line_end_offset;
                 line_start_offset = line_end_offset;
@@ -164,9 +201,35 @@ async fn read_projection_steps(
             }
         };
         let raw_ordinal = value.get("ordinal").and_then(serde_json::Value::as_u64);
+        if codex_rollout::is_retired_rollout_line(&value) {
+            // Retired display-only records consume their ordinal without projecting an item.
+            if let Some(ordinal) = raw_ordinal.filter(|ordinal| *ordinal >= next_ordinal) {
+                let end_ordinal_exclusive =
+                    ordinal
+                        .checked_add(1)
+                        .ok_or_else(|| ThreadStoreError::Internal {
+                            message: "rollout ordinal exceeds SQLite integer range".to_string(),
+                        })?;
+                projections.push(RolloutProjectionStep::SkippedOrdinalRange {
+                    start_ordinal: next_ordinal,
+                    end_ordinal_exclusive,
+                });
+                next_ordinal = end_ordinal_exclusive;
+            }
+            next_offset = line_end_offset;
+            line_start_offset = line_end_offset;
+            continue;
+        }
+        let is_external_record =
+            value.get("type").and_then(serde_json::Value::as_str) == Some("external_input");
         let line = match codex_rollout::decode_rollout_line(value) {
             Ok(line) => line,
             Err(err) => {
+                if rebuilding || is_external_record || external.is_pending() {
+                    return Err(ThreadStoreError::Internal {
+                        message: "unreadable external input history".into(),
+                    });
+                }
                 warn!(
                     thread_id = %thread_id,
                     rollout_path = %rollout_path.display(),
@@ -223,7 +286,17 @@ async fn read_projection_steps(
         let changes = if is_inherited_subagent_history {
             ThreadHistoryChangeSet::default()
         } else {
-            project_rollout_line(&line)
+            let mut changes = project_rollout_line(&line);
+            if let Some(item) =
+                external
+                    .observe(&line.item)
+                    .map_err(|e| ThreadStoreError::Internal {
+                        message: e.to_string(),
+                    })?
+            {
+                changes.changed_items.push(item);
+            }
+            changes
         };
         let fallback_created_at_ms = if changes
             .changed_items
@@ -296,6 +369,12 @@ async fn read_projection_steps(
                 end_byte_offset: line_end_offset,
                 fallback_created_at_ms,
                 changes,
+                presentation: match &line.item {
+                    RolloutItem::EventMsg(
+                        codex_protocol::protocol::EventMsg::PresentationAppended(record),
+                    ) => Some(record.clone()),
+                    _ => None,
+                },
                 realtime_item: match line.item {
                     RolloutItem::RealtimeItem(item) if !is_inherited_subagent_history => Some(item),
                     _ => None,
@@ -305,6 +384,18 @@ async fn read_projection_steps(
         next_ordinal = next_line_ordinal;
         next_offset = line_end_offset;
         line_start_offset = line_end_offset;
+    }
+    // A trailing segment with NUL bytes that is not valid JSON is crash residue, not a record still
+    // being written (the writer never emits a raw NUL).
+    // It stays unprojected (byte checkpoints never move past it) until the writer terminates it
+    // with a newline before its next append; only a real partial record blocks a rebuild.
+    let partial_tail = &bytes[complete_byte_count..];
+    let has_partial_record =
+        !partial_tail.is_empty() && !codex_rollout::is_crash_residue_line(partial_tail);
+    if external.is_pending() || (rebuilding && has_partial_record) {
+        return Err(ThreadStoreError::Internal {
+            message: "partial history during external input projection".into(),
+        });
     }
     Ok((projections, next_offset))
 }
@@ -317,6 +408,7 @@ enum ProjectionAnomaly {
     DuplicateOrRegressedOrdinal,
     ForwardOrdinalGap,
     InvalidTimestamp,
+    CrashResidue,
 }
 
 impl ProjectionAnomaly {
@@ -328,6 +420,7 @@ impl ProjectionAnomaly {
             Self::DuplicateOrRegressedOrdinal => "duplicate_or_regressed_ordinal",
             Self::ForwardOrdinalGap => "forward_ordinal_gap",
             Self::InvalidTimestamp => "invalid_timestamp",
+            Self::CrashResidue => "crash_residue",
         }
     }
 }

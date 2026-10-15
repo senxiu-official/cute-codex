@@ -72,6 +72,7 @@ pub(super) async fn prepare(
     )
     .await?;
 
+    let source_rollout_path = source_segment.rollout_path.clone();
     let history_base = history_base_at_boundary(store, thread_id, boundary, &lineage).await?;
     drop(source_writer_guard);
     let model_context = Arc::new(model_context::load_for_fork(lineage, history_base).await?);
@@ -81,7 +82,8 @@ pub(super) async fn prepare(
         history_base,
         model_context,
         source_reservation,
-    ))
+    )
+    .with_source_rollout_path(source_rollout_path))
 }
 
 pub(super) async fn history_base_at_boundary(

@@ -1,14 +1,10 @@
-//! One short Astra flourish for a confirmed new task with an untouched prompt.
+//! A persistent Astra starfield that follows the effective model.
 //!
-//! Ordinary draft content ends the opportunity permanently; slash commands can still select Astra
-//! if the flourish has never started. The original field fills blank composer cells without drawing
-//! over the placeholder or normal terminal cursor, and hidden frames do not schedule work. The
-//! separate field renderer only paints its buffer and has no input or scheduling state. History
-//! search hides an active field while its original deadline continues; its query and previews do
-//! not count as input before acceptance. Shortcut help on an empty composer also hides an active
-//! field without restarting its deadline and leaves an unused opportunity intact. The disconnected
-//! editor shares draft tracking but treats composer-only shortcuts as ordinary editor input. A key
-//! that finishes a paste burst reconciles the draft even if it removes a held slash in the same edit.
+//! This restores the pre-0.156 behavior: while the effective model is Astra (and motion, starfield,
+//! and true-color settings allow it), the composer keeps scheduling the field. Input does not end
+//! the effect; the renderer fills only blank cells outside the complete input lines and the
+//! terminal cursor, keeping terminal line selections clear of star glyphs. Hidden frames do not
+//! schedule work.
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -35,8 +31,6 @@ use crate::terminal_palette::effective_stdout_color_level;
 mod field;
 
 const FRAME_TICK: Duration = Duration::from_millis(/*millis*/ 150);
-const IDLE_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 15);
-const IDLE_FADE: Duration = Duration::from_secs(/*secs*/ 1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SparkleDraft {
@@ -61,23 +55,23 @@ pub(super) struct SparkleEditorState {
 }
 
 pub(super) struct Sparkle {
+    enabled: Cell<bool>,
     pub(super) draft: Cell<SparkleDraft>,
     /// Scoped to history's own replacements; other draft changes still count while search is open.
     pub(super) history_preview: bool,
     command_input: RefCell<String>,
     phase: Cell<Phase>,
-    fresh: bool,
     terminal_focused: bool,
 }
 
 impl Default for Sparkle {
     fn default() -> Self {
         Self {
+            enabled: Cell::new(false),
             draft: Cell::new(SparkleDraft::Untouched),
             history_preview: false,
             command_input: RefCell::new(String::new()),
             phase: Cell::new(Phase::Unarmed),
-            fresh: false,
             terminal_focused: true,
         }
     }
@@ -90,29 +84,15 @@ impl BottomPane {
             .any(|part| part.eq_ignore_ascii_case("astra"))
     }
 
-    pub(crate) fn mark_fresh_task_for_sparkle(&mut self, model: &str, settings: &Tui) {
-        self.composer.sparkle.fresh = true;
-        if matches!(
-            self.composer.sparkle.draft.get(),
-            SparkleDraft::Untouched | SparkleDraft::Command
-        ) && self.composer.sparkle.phase.get() == Phase::Unarmed
-            && settings.animations
-            && settings.effects.starfield
-            && Self::is_sparkle_model(model)
-        {
+    pub(crate) fn sync_model_sparkle(&mut self, model: &str, settings: &Tui) {
+        let eligible =
+            settings.animations && settings.effects.starfield && Self::is_sparkle_model(model);
+        let phase = self.composer.sparkle.phase.get();
+        self.composer.sparkle.enabled.set(eligible);
+        if eligible && matches!(phase, Phase::Unarmed | Phase::Finished) {
             self.composer.sparkle.phase.set(Phase::Waiting);
             self.request_redraw();
-        }
-    }
-
-    pub(crate) fn select_sparkle_model(&mut self, model: &str, settings: &Tui) {
-        if self.composer.sparkle.fresh {
-            self.mark_fresh_task_for_sparkle(model, settings);
-        }
-    }
-
-    pub(crate) fn stop_ineligible_sparkle(&self, model: &str, settings: &Tui) {
-        if !settings.animations || !settings.effects.starfield || !Self::is_sparkle_model(model) {
+        } else if !eligible && matches!(phase, Phase::Waiting | Phase::Visible(_)) {
             self.composer.stop_visible_sparkle();
         }
     }
@@ -349,16 +329,11 @@ impl ChatComposer {
         now: Instant,
         buf: &mut Buffer,
     ) {
-        if self.history_search.is_none()
-            && self.draft.textarea.vim_query().is_none()
-            && !self.is_empty()
-        {
-            let is_command = self.sparkle.draft.get() == SparkleDraft::Command
-                && self.is_sparkle_command(&self.current_text())
-                && self.attachments.is_empty();
-            if !is_command {
-                self.dismiss_sparkle();
-            }
+        if !self.sparkle.enabled.get() {
+            return;
+        }
+        if matches!(self.sparkle.phase.get(), Phase::Unarmed | Phase::Finished) {
+            self.sparkle.phase.set(Phase::Waiting);
         }
         let since = match self.sparkle.phase.get() {
             Phase::Visible(since) => Some(since),
@@ -366,18 +341,8 @@ impl ChatComposer {
             Phase::Unarmed | Phase::Finished => return,
         };
         let elapsed = since.map_or(Duration::ZERO, |since| now.saturating_duration_since(since));
-        if elapsed >= IDLE_TIMEOUT {
-            self.stop_visible_sparkle();
-            return;
-        }
-        if !self.has_focus
-            || !self.sparkle.terminal_focused
-            || !self.is_empty()
-            || self.sparkle.draft.get() == SparkleDraft::Command
+        if !self.sparkle.terminal_focused
             || self.draft.paste_burst.is_active()
-            || !self.draft.input_enabled
-            || self.is_task_running
-            || self.voice_strip.is_some()
             || self.popup_active()
             || self.footer_mode() == FooterMode::ShortcutOverlay
             || area.height < 3
@@ -392,31 +357,29 @@ impl ChatComposer {
         if since.is_none() {
             self.sparkle.phase.set(Phase::Visible(now));
         }
-        let fade_start = IDLE_TIMEOUT - IDLE_FADE;
-        let visibility = if elapsed > fade_start {
-            (IDLE_TIMEOUT - elapsed).as_secs_f32() / IDLE_FADE.as_secs_f32()
+        let protected = if self.is_empty() {
+            Rect::new(
+                textarea.x,
+                textarea.y,
+                self.placeholder_text
+                    .width()
+                    .min(usize::from(textarea.width)) as u16,
+                /*height*/ 1,
+            )
         } else {
-            1.0
+            Rect::new(area.x, textarea.y, area.width, textarea.height)
         };
-        let protected = Rect::new(
-            textarea.x,
-            textarea.y,
-            self.placeholder_text
-                .width()
-                .min(usize::from(textarea.width)) as u16,
-            /*height*/ 1,
-        );
         field::render_stars(
             area,
             cursor,
             Some(protected),
-            elapsed.min(fade_start),
+            elapsed,
             foreground,
-            visibility,
+            /*visibility*/ 1.0,
             buf,
         );
         if let Some(requester) = &self.frame_requester {
-            requester.schedule_frame_in(FRAME_TICK.min(IDLE_TIMEOUT - elapsed));
+            requester.schedule_frame_in(FRAME_TICK);
         }
     }
 }

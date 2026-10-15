@@ -255,6 +255,7 @@ impl AppServerSession {
             self.thread_params_mode(),
         )
         .await?;
+        started.session.presentation_timeline = self.presentation_timeline(thread_id).await?;
         started.session.fork_parent_title = fork_parent_title;
         if self.task_tools_available(thread_id) {
             self.remember_task_tool_thread(thread_id);

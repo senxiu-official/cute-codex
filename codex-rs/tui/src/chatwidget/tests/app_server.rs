@@ -48,6 +48,7 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-5.2".to_string(),

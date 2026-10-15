@@ -182,6 +182,7 @@ pub(super) async fn run_main_inner(
     );
     let reuse_implicit_local_daemon = daemon_exclusion.is_none();
     let search_only_config_override = !workload_identity_selected
+        && !codex_login::explicit_auth_file_selected()
         && cli.web_search
         && startup_preflight::has_only_search_config_override(&cli_kv_overrides)
         && loader_overrides_are_default(&launch_loader_overrides)

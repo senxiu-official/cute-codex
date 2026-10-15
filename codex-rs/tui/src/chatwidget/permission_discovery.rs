@@ -14,6 +14,10 @@ impl ChatWidget {
         }
     }
     pub(crate) fn request_permission_profiles(&mut self) {
+        if self.config.model_provider_id == "cute-claude" {
+            self.open_permissions_popup();
+            return;
+        }
         self.invalidate_permission_discovery();
         let request_id = uuid::Uuid::new_v4();
         self.permission_popup_request_id = Some(request_id);

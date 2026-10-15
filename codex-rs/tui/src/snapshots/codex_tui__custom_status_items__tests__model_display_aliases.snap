@@ -1,0 +1,7 @@
+---
+source: tui/src/custom_status_items_tests.rs
+assertion_line: 244
+expression: "items.1.iter().map(|(id, display)|\nformat!(\"{id} → {display}\")).collect::<Vec<_>>().join(\"\\n\")"
+---
+gpt-6-astra → astra
+sonnet → Sonnet

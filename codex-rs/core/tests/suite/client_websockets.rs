@@ -165,6 +165,47 @@ fn websocket_connection_metadata(harness: &WebsocketTestHarness) -> CodexRespons
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_variant_websocket_sends_upstream_model() {
+    skip_if_no_network!();
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("r1"),
+        ev_completed("r1"),
+    ]]])
+    .await;
+    let mut harness = websocket_harness_for_codex_backend(&server).await;
+    harness.model_info.request_model = Some(MODEL.to_string());
+    harness.model_info.slug = "Astra [285K]".to_string();
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+    let metadata = turn_metadata(&harness, /*turn_id*/ None);
+    let mut stream = session
+        .stream(
+            &prompt,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            &metadata,
+            &InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("variant stream");
+    while let Some(event) = stream.next().await {
+        event.expect("variant response");
+    }
+    assert_eq!(
+        server
+            .single_connection()
+            .first()
+            .expect("request")
+            .body_json()["model"],
+        MODEL
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_preserves_credit_usage_metadata() {
     skip_if_no_network!();
 

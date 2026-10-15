@@ -757,6 +757,7 @@ pub(crate) async fn record_pending_input(
                     name,
                     namespace,
                     output: output.body,
+                    external_input_view: None,
                 });
                 sess.emit_turn_item_started(turn_context, &item).await;
                 sess.emit_turn_item_completed(turn_context, item).await;

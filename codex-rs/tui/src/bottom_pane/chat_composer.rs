@@ -170,33 +170,13 @@
 //!
 //! # Astra Sparkle Eligibility
 //!
-//! A confirmed new task can offer one flourish when it starts with Astra or the user switches to
-//! Astra through `/model` before entering ordinary prompt content. The draft tracks whether it is
-//! untouched, contains a recognized slash command, or is permanently dismissed. An eligible slash
-//! command keeps the opportunity while being typed, dispatched, or erased; a fresh Astra response
-//! can arm the effect while the command is still pending. Stars stay hidden until the composer is
-//! empty. Commands that insert draft content, ordinary typed, pasted, or restored drafts,
-//! attachments, and real work dismiss the opportunity even if that content is later cleared.
-//! Ordinary disconnected edits also dismiss it immediately, even when erased before rendering;
-//! a recognized command typed and erased offline still preserves the opportunity.
-//! Opening history search, typing or pasting its query, and canceling it with `Esc` or `Ctrl+C`
-//! temporarily hide an active field without restarting its deadline. Any buffered keys are
-//! integrated into the original draft without being classified again. A preview does not count
-//! as a draft until the user accepts a nonempty match.
-//! Toggling shortcut help on an empty composer also hides an active field until help closes,
-//! without restarting its deadline, and leaves an unused opportunity intact. A literal `?` is
-//! ordinary prompt content.
-//! Startup draft snapshots carry this distinction so erased ordinary input does not become
-//! untouched on handoff.
-//!
-//! Sparkle key and paste handling runs only for input routed to the composer; ordinary characters
-//! are observed before the paste-burst buffer can hide the first edit. An edit that flushes and
-//! erases a held slash also clears the tracked command. An empty main-composer `Esc`
-//! can stop the active flourish. Once shown, it fades out by 15 seconds; command entry, popups, and
-//! focus loss hide the field without restarting that deadline. Rendering runs after the textarea,
-//! placeholder, effort ignition, and voice strip, and draws only in eligible blank cells without
-//! overwriting the placeholder or normal cursor. Hidden frames do not schedule animation redraws;
-//! motion settings, the starfield preference, and true-color support also gate the effect.
+//! The sparkle follows the effective model, restoring the pre-0.156 experience: an Astra model
+//! keeps the composer starfield active, while switching to another model stops it. Draft input,
+//! submissions, restored history, and running work do not permanently dismiss it. Popups and
+//! shortcut overlays own their frames while open; closing them resumes the field. Rendering runs
+//! after the textarea, placeholder, effort ignition, and voice strip, and decorates only eligible
+//! blank cells without overwriting protected content or the normal cursor. Motion, starfield,
+//! and true-color settings still gate the effect, and hidden frames do not schedule redraws.
 //!
 //! # Large Paste Placeholders
 //!
@@ -749,7 +729,7 @@ impl ChatComposer {
                 collaboration_mode_indicator: None,
                 goal_status_indicator: None,
                 ide_context_active: false,
-                status_line_value: None,
+                status_line_rows: Vec::new(),
                 status_line_hyperlink_url: None,
                 status_line_enabled: false,
                 side_conversation_context_label: None,
@@ -3862,7 +3842,14 @@ impl ChatComposer {
             quit_shortcut_key: self.footer.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
-            status_line_value: self.footer.status_line_value.clone(),
+            status_line_prefix: self
+                .footer
+                .status_line_rows
+                .iter()
+                .take(self.footer.status_line_rows.len().saturating_sub(1))
+                .cloned()
+                .collect(),
+            status_line_value: self.footer.status_line_rows.last().cloned(),
             status_line_enabled: self.footer.status_line_enabled,
             key_hints: FooterKeyHints {
                 agents: self
@@ -4403,11 +4390,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) -> bool {
-        if self.footer.status_line_value == status_line {
-            return false;
-        }
-        self.footer.status_line_value = status_line;
-        true
+        self.set_status_line_rows(status_line.into_iter().collect())
     }
 
     pub(crate) fn set_status_line_hyperlink(&mut self, url: Option<String>) -> bool {
@@ -4692,7 +4675,7 @@ impl ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let hint_rect = if let Some(warning_area) = warning_area {
+                let mut hint_rect = if let Some(warning_area) = warning_area {
                     Rect {
                         width: warning_area
                             .x
@@ -4708,6 +4691,53 @@ impl ChatComposer {
                 } else if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
                 } else {
+                    let mut footer_props = footer_props;
+                    let prefix_visible = uses_passive_footer_status_layout(&footer_props)
+                        && !self.footer.flash_visible()
+                        && self.footer.hint_override.is_none();
+                    if prefix_visible
+                        && hint_rect.height < 2
+                        && !footer_props.status_line_prefix.is_empty()
+                    {
+                        footer_props.status_line_value =
+                            footer_props.status_line_prefix.first().cloned();
+                        footer_props.status_line_prefix.clear();
+                    }
+                    if prefix_visible && !footer_props.status_line_prefix.is_empty() {
+                        let prefix = &footer_props.status_line_prefix[0];
+                        let row = Rect {
+                            height: 1.min(hint_rect.height),
+                            ..hint_rect
+                        };
+                        let mut line = prefix.clone();
+                        if let Some(transition) = &self.effort_status_line_transition
+                            && !transition.is_finished()
+                            && let Some(animated) = transition.render_line(
+                                Some(&line),
+                                row.width.saturating_sub(FOOTER_INDENT_COLS as u16),
+                            )
+                        {
+                            line = animated;
+                        }
+                        render_footer_line(
+                            row,
+                            buf,
+                            truncate_line_with_ellipsis_if_overflow(
+                                line,
+                                row.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize,
+                            ),
+                        );
+                        if let Some(url) = self.footer.status_line_hyperlink_url.as_deref() {
+                            mark_underlined_hyperlink(buf, row, url);
+                        }
+                        if hint_rect.height >= 2 {
+                            hint_rect.y += 1;
+                            hint_rect.height -= 1;
+                        } else {
+                            // Preserve the first row when the input leaves space for only one.
+                            hint_rect.height = 0;
+                        }
+                    }
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
                     let status_line_active = uses_passive_footer_status_layout(&footer_props);
@@ -4725,6 +4755,7 @@ impl ChatComposer {
                             .as_ref()
                             .is_some_and(|transition| !transition.is_finished());
                     let combined_status_line = if transition_visible
+                        && footer_props.status_line_prefix.is_empty()
                         && let Some(transition) = &self.effort_status_line_transition
                         && !transition.is_finished()
                     {
@@ -5660,6 +5691,55 @@ mod tests {
             plugin_mention_foreground_color(&composer),
             Some(Color::Magenta)
         );
+    }
+
+    #[test]
+    fn cutex_two_rows_resize_and_hints_preserve_input() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let mut composer =
+            ChatComposer::new(true, AppEventSender::new(tx), true, "Ask".into(), false);
+        composer.set_status_line_enabled(true);
+        for width in [20, 40, 80, 120] {
+            composer.set_status_line_rows(vec![Line::from("FIRST 中文"), Line::from("SECOND")]);
+            let area = Rect::new(0, 0, width, 7);
+            let mut buf = Buffer::empty(area);
+            composer.render(area, &mut buf);
+            let text = buf
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>();
+            assert!(text.contains("FIRST"));
+            assert!(text.contains("SECOND"));
+            for height in [3, 4, 5] {
+                let small = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(small);
+                composer.render(small, &mut buf);
+                assert!(composer.cursor_pos(small).is_some());
+            }
+            composer.set_status_line(Some(Line::from("ONLY")));
+            buf = Buffer::empty(area);
+            composer.render(area, &mut buf);
+            let text = buf
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>();
+            assert!(text.contains("ONLY"));
+            assert!(!text.contains("SECOND"));
+            composer.set_status_line_rows(vec![Line::from("FIRST"), Line::from("SECOND")]);
+            composer.show_footer_flash(Line::from("FLASH"), Duration::from_secs(5));
+            buf = Buffer::empty(area);
+            composer.render(area, &mut buf);
+            let text = buf
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>();
+            assert!(text.contains("FLASH"));
+            assert!(!text.contains("SECOND"));
+            composer.footer.flash = None;
+        }
     }
 
     #[test]

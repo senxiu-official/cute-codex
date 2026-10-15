@@ -3311,3 +3311,190 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         1,
     );
 }
+
+fn external_input_ledger_mid_turn() -> Vec<RolloutItem> {
+    use codex_protocol::external_input::Commit;
+    use codex_protocol::external_input::Delivery;
+    use codex_protocol::external_input::Envelope;
+    use codex_protocol::external_input::Message;
+    use codex_protocol::external_input::Receipt;
+    use codex_protocol::external_input::Source;
+    use codex_protocol::external_input::SourceKind;
+    use codex_protocol::external_input_record::Fact;
+    use codex_protocol::external_input_record::MessageKey;
+    use codex_protocol::external_input_record::Record;
+
+    let mut envelope = Envelope {
+        view: None,
+        version: 1,
+        owner_id: "owner".into(),
+        thread_id: "thread".into(),
+        runtime_generation: 7,
+        message: Message {
+            id: "message".into(),
+            source: Source {
+                kind: SourceKind::Service,
+                id: "fixture".into(),
+            },
+            event_type: "opaque".into(),
+            delivery: Delivery::AfterTurn,
+            text: "canonical data".into(),
+        },
+        semantic_sha256: String::new(),
+    };
+    envelope.semantic_sha256 = envelope.digest();
+    let commit = Commit {
+        receipt: Receipt::new(&envelope, "turn".into(), 1).expect("receipt"),
+        envelope,
+    };
+    let record = |fact| {
+        RolloutItem::ExternalInput(Record {
+            version: 1,
+            owner_id: "owner".into(),
+            thread_id: "thread".into(),
+            fact,
+        })
+    };
+    let key = MessageKey {
+        message_id: commit.envelope.message.id.clone(),
+        semantic_sha256: commit.envelope.semantic_sha256.clone(),
+    };
+    vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn".into(),
+            root_turn_id: None,
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+        })),
+        record(Fact::Commit {
+            commit: Box::new(commit.clone()),
+        }),
+        RolloutItem::ResponseItem(
+            commit
+                .envelope
+                .response_item()
+                .expect("model item")
+                .into(),
+        ),
+        // Claimed and still running: the obligation is unfinished.
+        record(Fact::Claim {
+            key,
+            attempt_id: uuid::Uuid::from_u128(1),
+        }),
+    ]
+}
+
+#[test]
+fn fork_external_input_strip_adjusts_referenced_prefix() {
+    let items = external_input_ledger_mid_turn();
+    assert!(crate::external_input::recovery::ensure_migration_allowed(&items).is_err());
+    assert_eq!(
+        crate::external_input::recovery::ensure_fork_allowed(&items),
+        Ok(())
+    );
+    let (history, persistence) = strip_fork_external_input(
+        InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::new(),
+            history: Arc::new(items.clone()),
+            rollout_path: None,
+        }),
+        ForkPersistence::Referenced {
+            history_base: None,
+            inherited_item_count: items.len(),
+        },
+    );
+    assert_eq!(history.get_rollout_items().len(), 2);
+    assert!(
+        !history
+            .get_rollout_items()
+            .iter()
+            .any(|item| matches!(item, RolloutItem::ExternalInput(_)))
+    );
+    assert!(matches!(
+        persistence,
+        ForkPersistence::Referenced {
+            inherited_item_count: 2,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn fork_copies_history_without_unfinished_external_input_ledger() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        build_models_manager(&config, auth_manager.clone()),
+        crate::CodexAppsToolsCache::default(),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        Arc::new(crate::test_support::EmptyUserInstructionsProvider),
+        /*analytics_events_client*/ None,
+        passthrough_image_store(),
+        thread_store_from_config(&config, state_db.clone()),
+        local_agent_graph_store_from_state_db(state_db.as_ref()),
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
+    );
+
+    let mut initial = vec![RolloutItem::ResponseItem(user_msg("hello").into())];
+    initial.extend(external_input_ledger_mid_turn());
+    let source = manager
+        .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
+            initial_history: InitialHistory::Forked(initial),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("create source thread with an unfinished ExternalInput obligation");
+    let source_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    let (source_items, _, _) = RolloutRecorder::load_rollout_items(&source_path)
+        .await
+        .expect("read source rollout");
+    assert!(crate::external_input::recovery::ensure_migration_allowed(&source_items).is_err());
+    manager.remove_thread(&source.thread_id).await;
+
+    let forked = manager
+        .fork_legacy_thread(
+            ForkSnapshot::Interrupted,
+            crate::StartThreadOptions::new(config.clone()),
+            source_path,
+        )
+        .await
+        .expect("fork despite the source's unfinished ExternalInput obligation");
+    let forked_path = forked
+        .thread
+        .rollout_path()
+        .expect("forked rollout path should exist");
+    let (forked_items, _, _) = RolloutRecorder::load_rollout_items(&forked_path)
+        .await
+        .expect("read forked rollout");
+    assert!(
+        !forked_items
+            .iter()
+            .any(|item| matches!(item, RolloutItem::ExternalInput(_))),
+        "fork child must not copy the source's ExternalInput ledger"
+    );
+    // The model-visible message the source received is still part of the child's context.
+    assert!(
+        serde_json::to_string(&forked_items)
+            .expect("serialize forked rollout")
+            .contains("canonical data")
+    );
+}

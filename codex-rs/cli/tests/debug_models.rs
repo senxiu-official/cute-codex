@@ -38,3 +38,17 @@ fn debug_models_default_prints_json_without_auth() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn debug_models_capabilities_ignores_config_and_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(codex_home.path().join("config.toml"), "invalid TOML [")?;
+    std::fs::write(codex_home.path().join("auth.json"), "invalid JSON")?;
+    let output = codex_command(codex_home.path())?
+        .args(["debug", "models", "--capabilities"])
+        .output()?;
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    pretty_assertions::assert_eq!(value, serde_json::json!({"modelVariants": true}));
+    Ok(())
+}

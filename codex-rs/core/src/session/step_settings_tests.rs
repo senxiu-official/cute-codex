@@ -317,6 +317,76 @@ fn step_settings_constraints(requirements: &ConfigRequirements) -> StepSettingsC
     }
 }
 
+#[tokio::test]
+async fn model_variant_cannot_bypass_underlying_review_requirements() {
+    let requirements = ConfigRequirements {
+        auto_review_required_models: Some(Sourced::new(
+            BTreeSet::from(["protected-model".to_string()]),
+            RequirementSource::Unknown,
+        )),
+        ..Default::default()
+    };
+    let selected = Arc::new(configured_settings());
+    let initial = Arc::new(model_info_from_slug(selected.collaboration_mode.model()));
+    let mut variant = model_info_from_slug("Protected [285K]");
+    variant.request_model = Some("protected-model".to_string());
+    let manager = StaticModelsManager::new(
+        /*auth_manager*/ None,
+        ModelsResponse {
+            models: vec![variant],
+        },
+    );
+    let settings = ResolvedStepSettings::new(selected, initial, /*fast_mode_enabled*/ false);
+    let update = StepSettingsUpdate {
+        model: Some("Protected [285K]".to_string()),
+        ..Default::default()
+    };
+    let constraints = StepSettingsConstraints {
+        guardian_approval_enabled: true,
+        ..step_settings_constraints(&requirements)
+    };
+    let admitted = settings
+        .apply_update(
+            &update,
+            &constraints,
+            &manager,
+            &ModelInfoOverrides::default(),
+            /*fast_mode_enabled*/ false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(admitted.approvals_reviewer(), ApprovalsReviewer::AutoReview);
+    let unsafe_constraints = StepSettingsConstraints {
+        has_full_disk_write_access: true,
+        ..constraints
+    };
+    assert_eq!(
+        admitted.revalidate(&unsafe_constraints).err(),
+        Some(ConstraintError::AutoReviewRequired {
+            model: "Protected [285K]".to_string()
+        })
+    );
+    let explicit_user = StepSettingsUpdate {
+        approvals_reviewer: Some(ApprovalsReviewer::User),
+        ..update
+    };
+    assert_eq!(
+        settings
+            .apply_update(
+                &explicit_user,
+                &unsafe_constraints,
+                &manager,
+                &ModelInfoOverrides::default(),
+                /*fast_mode_enabled*/ false
+            )
+            .await
+            .err(),
+        Some(ConstraintError::AutoReviewRequired {
+            model: "Protected [285K]".to_string()
+        })
+    );
+}
+
 #[test]
 fn sparse_patch_uses_the_settings_version_being_updated() {
     let requirements = ConfigRequirements::default();

@@ -116,6 +116,39 @@ fn external_agent_config_detect_response_defaults_connectors_for_older_servers()
 }
 
 #[test]
+fn token_usage_compaction_count_is_optional_on_the_wire() {
+    let breakdown = TokenUsageBreakdown {
+        total_tokens: 10,
+        input_tokens: 4,
+        cached_input_tokens: 1,
+        cache_write_input_tokens: 0,
+        output_tokens: 5,
+        reasoning_output_tokens: 0,
+    };
+    let usage = ThreadTokenUsage {
+        total: breakdown.clone(),
+        last: breakdown,
+        model_context_window: Some(128_000),
+        compaction_count: Some(2),
+    };
+
+    let value = serde_json::to_value(&usage).expect("serialize token usage");
+    assert_eq!(value.get("compactionCount"), Some(&json!(2)));
+
+    let mut legacy = value.clone();
+    legacy
+        .as_object_mut()
+        .expect("token usage should be an object")
+        .remove("compactionCount");
+    assert_eq!(
+        serde_json::from_value::<ThreadTokenUsage>(legacy)
+            .expect("older token usage should deserialize")
+            .compaction_count,
+        None
+    );
+}
+
+#[test]
 fn thread_background_terminals_list_response_round_trips_foreign_paths() {
     for (uri, expected_cwd) in [
         ("file:///home/alice/repo", "/home/alice/repo"),

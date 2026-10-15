@@ -4,7 +4,6 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
-use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
@@ -200,26 +199,51 @@ impl ChatWidget {
     }
 
     fn refresh_status_line_from_selections(&mut self, selections: &StatusSurfaceSelections) {
-        let enabled = !selections.status_line_items.is_empty();
+        let enabled = selections
+            .status_line_items
+            .iter()
+            .any(|i| *i != StatusLineItem::CutexNewline);
         self.bottom_pane.set_status_line_enabled(enabled);
-        if !enabled {
-            self.set_status_line(/*status_line*/ None);
-            self.set_status_line_hyperlink(/*url*/ None);
-            return;
-        }
-
-        let mut segments = Vec::new();
-        for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(*item) {
-                segments.push((*item, value));
+        let mut rows = Vec::new();
+        let mut next_frame = None;
+        for group in
+            crate::bottom_pane::status_line_layout::split(selections.status_line_items.clone())
+        {
+            let segments: Vec<_> = group
+                .into_iter()
+                .filter_map(|item| {
+                    self.status_line_value_for_item(item)
+                        .map(|value| (item, crate::cutex_status_presentation::text(item, value)))
+                })
+                .collect();
+            let ids: Vec<_> = segments.iter().map(|(id, _)| *id).collect();
+            if let Some(mut line) = crate::bottom_pane::status_line_with_notification_style(
+                segments,
+                self.local_settings.tui.status_line_use_colors,
+                self.notification_control.style,
+                self.thread_id,
+            ) {
+                if self.local_settings.tui.animations
+                    && let Some(delay) = crate::custom_status_items::animate_line(&mut line, &ids)
+                {
+                    next_frame = Some(
+                        next_frame.map_or(delay, |prior: std::time::Duration| prior.min(delay)),
+                    );
+                }
+                if !self.local_settings.tui.animations {
+                    crate::cutex_status_presentation::decorate_line(&mut line, &ids);
+                }
+                rows.push(line);
             }
         }
-
-        self.set_status_line(status_line_from_segments(
-            segments,
-            self.local_settings.tui.status_line_use_colors,
-            self.thread_id,
-        ));
+        if let Some(delay) = next_frame {
+            self.frame_requester.schedule_frame_in(delay);
+        }
+        if rows.len() <= 1 {
+            self.set_status_line(rows.pop());
+        } else {
+            self.bottom_pane.set_status_line_rows(rows);
+        }
         let hyperlink_url = selections
             .status_line_items
             .contains(&StatusLineItem::PullRequestNumber)
@@ -453,8 +477,12 @@ impl ChatWidget {
     /// Parses configured status-line ids into known items and collects unknown ids.
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
-    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
-        parse_items_with_invalids(self.configured_status_line_items())
+    pub(super) fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
+        let configured = self.configured_status_line_items();
+        let disabled = configured.is_empty();
+        let (mut items, invalid) = parse_items_with_invalids(configured);
+        crate::cutex_version_status::append_automatic_item(&mut items, disabled);
+        (items, invalid)
     }
 
     pub(super) fn configured_status_line_items(&self) -> Vec<String> {
@@ -711,10 +739,27 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
+            StatusLineItem::CutexWelcomeIndentation
+            | StatusLineItem::CutexSpace2
+            | StatusLineItem::CutexSpace4
+            | StatusLineItem::CutexSpace6
+            | StatusLineItem::CutexSpace8
+            | StatusLineItem::CutexSpace10 => crate::bottom_pane::status_line_layout::spacing(item),
+            StatusLineItem::CutexAgentName => crate::cutex_agent_status::value(),
+            StatusLineItem::CutexNewline => None,
+            StatusLineItem::Notification => Some(
+                self.notification_control
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| "NOTIFY?".into()),
+            ),
+            StatusLineItem::CustomProfile
+            | StatusLineItem::CustomBonVoyage
+            | StatusLineItem::CutexAlignedProfile => Some(crate::custom_status_items::value(item)),
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
-            StatusLineItem::CurrentDir => {
+            StatusLineItem::CurrentDir | StatusLineItem::CutexWorkdir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
                     /*max_width*/ None,
@@ -754,26 +799,104 @@ impl ChatWidget {
             StatusLineItem::ContextRemaining => self
                 .status_line_context_remaining_percent()
                 .map(|remaining| format!("Context {remaining}% left")),
+            StatusLineItem::CutexContextRemaining => {
+                let remaining = self.status_line_context_remaining_percent()?;
+                match self
+                    .token_info
+                    .as_ref()
+                    .and_then(|info| info.compaction_count)
+                {
+                    Some(compaction_count) => Some(format!("C {remaining}% [{compaction_count}]")),
+                    None => Some(format!("C {remaining}%")),
+                }
+            }
             StatusLineItem::ContextUsed => self
                 .status_line_context_used_percent()
                 .map(|used| format!("Context {used}% used")),
-            StatusLineItem::FiveHourLimit => {
+            StatusLineItem::FiveHourLimit
+            | StatusLineItem::CutexFiveHourLimit
+            | StatusLineItem::CutexSimpleFiveHourLimit => {
                 let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
-                    .get("codex")
+                    .get(if self.config.model_provider_id == "cute-claude" {
+                        "claude-five_hour"
+                    } else {
+                        "codex"
+                    })
                     .and_then(five_hour_status_window)?;
                 let label = limit_label_for_window(window.window_minutes, is_secondary);
-                self.status_line_limit_display(Some(window), &label)
+                if matches!(
+                    item,
+                    StatusLineItem::CutexFiveHourLimit
+                        | StatusLineItem::CutexWeeklyLimit
+                        | StatusLineItem::CutexSimpleFiveHourLimit
+                        | StatusLineItem::CutexSimpleWeeklyLimit
+                ) {
+                    crate::cutex_status_presentation::quota(
+                        window,
+                        item,
+                        chrono::Utc::now().timestamp(),
+                    )
+                } else {
+                    self.status_line_limit_display(Some(window), &label)
+                }
             }
-            StatusLineItem::WeeklyLimit => {
+            StatusLineItem::WeeklyLimit
+            | StatusLineItem::CutexWeeklyLimit
+            | StatusLineItem::CutexSimpleWeeklyLimit => {
                 let (window, is_secondary) = self
                     .rate_limit_snapshots_by_limit_id
-                    .get("codex")
+                    .get(if self.config.model_provider_id == "cute-claude" {
+                        "claude-seven_day"
+                    } else {
+                        "codex"
+                    })
                     .and_then(weekly_status_window)?;
                 let label = limit_label_for_window(window.window_minutes, is_secondary);
-                self.status_line_limit_display(Some(window), &label)
+                if matches!(
+                    item,
+                    StatusLineItem::CutexFiveHourLimit
+                        | StatusLineItem::CutexWeeklyLimit
+                        | StatusLineItem::CutexSimpleFiveHourLimit
+                        | StatusLineItem::CutexSimpleWeeklyLimit
+                ) {
+                    crate::cutex_status_presentation::quota(
+                        window,
+                        item,
+                        chrono::Utc::now().timestamp(),
+                    )
+                } else {
+                    self.status_line_limit_display(Some(window), &label)
+                }
+            }
+            StatusLineItem::CutexCustomizedLimit | StatusLineItem::CutexCustomizedLimitBar => self
+                .notification_control
+                .custom_limit
+                .as_ref()
+                .map(|limit| limit.render(item, chrono::Utc::now().timestamp())),
+            StatusLineItem::CutexFableLimit | StatusLineItem::CutexFableLimitBar => {
+                if self.config.model_provider_id != "cute-claude" {
+                    return None;
+                }
+                let snapshot = self
+                    .rate_limit_snapshots_by_limit_id
+                    .iter()
+                    .find(|(id, s)| {
+                        id.starts_with("claude-")
+                            && s.limit_name
+                                .split_whitespace()
+                                .any(|word| word.eq_ignore_ascii_case("fable"))
+                    })?
+                    .1;
+                let (window, _) = weekly_status_window(snapshot)?;
+                crate::cutex_status_presentation::quota(
+                    window,
+                    item,
+                    chrono::Utc::now().timestamp(),
+                )
             }
             StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
+            StatusLineItem::CutexVersion => crate::cutex_version_status::value(CODEX_CLI_VERSION),
             StatusLineItem::ContextWindowSize => self
                 .status_line_context_window_size()
                 .map(|cws| format!("{} window", format_tokens_compact(cws))),
@@ -841,12 +964,30 @@ impl ChatWidget {
         item: StatusSurfacePreviewItem,
     ) -> Option<String> {
         let status_line_item = match item {
+            StatusSurfacePreviewItem::CustomProfile => StatusLineItem::CustomProfile,
+            StatusSurfacePreviewItem::Notification => StatusLineItem::Notification,
+            StatusSurfacePreviewItem::CustomBonVoyage => StatusLineItem::CustomBonVoyage,
             StatusSurfacePreviewItem::AppName => return Some("codex".to_string()),
             StatusSurfacePreviewItem::ProjectName => return self.terminal_title_project_name(),
             StatusSurfacePreviewItem::ProjectRoot => StatusLineItem::ProjectRoot,
             StatusSurfacePreviewItem::Status => return Some(self.run_state_status_text()),
             StatusSurfacePreviewItem::TaskProgress => return self.terminal_title_task_progress(),
             StatusSurfacePreviewItem::CurrentDir => StatusLineItem::CurrentDir,
+            StatusSurfacePreviewItem::CutexWorkdir => StatusLineItem::CutexWorkdir,
+            StatusSurfacePreviewItem::CutexAgentName => StatusLineItem::CutexAgentName,
+            StatusSurfacePreviewItem::CutexContextRemaining => {
+                StatusLineItem::CutexContextRemaining
+            }
+            StatusSurfacePreviewItem::CutexFableLimitBar => StatusLineItem::CutexFableLimitBar,
+            StatusSurfacePreviewItem::CutexSimpleFiveHourLimit => {
+                StatusLineItem::CutexSimpleFiveHourLimit
+            }
+            StatusSurfacePreviewItem::CutexAlignedProfile => StatusLineItem::CutexAlignedProfile,
+            StatusSurfacePreviewItem::CutexFableLimit => StatusLineItem::CutexFableLimit,
+            StatusSurfacePreviewItem::CutexCustomizedLimit => StatusLineItem::CutexCustomizedLimit,
+            StatusSurfacePreviewItem::CutexCustomizedLimitBar => {
+                StatusLineItem::CutexCustomizedLimitBar
+            }
             StatusSurfacePreviewItem::Hostname => StatusLineItem::Hostname,
             StatusSurfacePreviewItem::ThreadName => StatusLineItem::ThreadName,
             StatusSurfacePreviewItem::ThreadTitle => StatusLineItem::ThreadTitle,
@@ -859,7 +1000,16 @@ impl ChatWidget {
             StatusSurfacePreviewItem::ContextUsed => StatusLineItem::ContextUsed,
             StatusSurfacePreviewItem::FiveHourLimit => StatusLineItem::FiveHourLimit,
             StatusSurfacePreviewItem::WeeklyLimit => StatusLineItem::WeeklyLimit,
+            StatusSurfacePreviewItem::CutexFiveHourLimit => StatusLineItem::CutexFiveHourLimit,
+            StatusSurfacePreviewItem::CutexWeeklyLimit => StatusLineItem::CutexWeeklyLimit,
+            StatusSurfacePreviewItem::CutexSimpleWeeklyLimit => {
+                StatusLineItem::CutexSimpleWeeklyLimit
+            }
+            StatusSurfacePreviewItem::CutexNewline | StatusSurfacePreviewItem::CutexSpacing => {
+                return None;
+            }
             StatusSurfacePreviewItem::CodexVersion => StatusLineItem::CodexVersion,
+            StatusSurfacePreviewItem::CutexVersion => StatusLineItem::CutexVersion,
             StatusSurfacePreviewItem::ContextWindowSize => StatusLineItem::ContextWindowSize,
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
@@ -1262,4 +1412,16 @@ where
         }
     }
     (items, invalid)
+}
+
+impl ChatWidget {
+    pub(super) fn refresh_custom_status_animation(&mut self) {
+        if self.local_settings.tui.animations
+            && !self.bottom_pane.has_active_view()
+            && crate::custom_status_items::has_animation()
+        {
+            let selections = self.status_surface_selections();
+            self.refresh_status_line_from_selections(&selections);
+        }
+    }
 }

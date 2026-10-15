@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/external_job_view_tests.rs
+assertion_line: 18
+expression: "format!(\"{header}\\n{}\", body.join(\"\\n\"))"
+---
+Job completed · build-check · job_12345678…abcd
+exit 0 · run 1.234 s

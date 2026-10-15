@@ -2791,3 +2791,395 @@ fn append_suffix(rollout_path: &std::path::Path, suffix: &str) {
     file.write_all(suffix.as_bytes()).expect("append suffix");
     file.flush().expect("flush suffix");
 }
+
+#[tokio::test]
+async fn retired_inter_agent_display_records_rebuild_without_rows() {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![turn_started("turn-1")],
+        })
+        .await
+        .expect("append turn start");
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    // A K-format display record written by older Cutex builds; current types cannot decode it.
+    let retired = serde_json::json!({
+        "timestamp": "2025-01-01T00:00:00.000Z", "ordinal": 2, "type": "event_msg",
+        "payload": {"type": "item_completed", "thread_id": thread_id.to_string(), "turn_id": "turn-1",
+            "item": {"type": "InterAgentMessage", "id": "old-id", "author": "/root/worker",
+                "recipient": "/root", "otherRecipients": [], "content": "DISPLAY_ONLY_SENTINEL",
+                "deliveryMode": "interrupt"}}
+    });
+    append_suffix(
+        rollout_path.as_path(),
+        format!(
+            "{retired}
+{}
+",
+            rollout_line(Some(3), turn_completed("turn-1"))
+        )
+        .as_str(),
+    );
+
+    let pool = codex_state::open_thread_history_db(&codex_state::SqliteConfig::new_for_testing(
+        home.path().abs(),
+    ))
+    .await
+    .expect("open thread history db");
+    // Simulate a revision-3 index that projected the record as a now-removed item type.
+    sqlx::query(
+        "UPDATE thread_history_projection_state SET external_input_version = 3 WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO thread_items (thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json) VALUES (?, 'turn-1', 'old-id', 2, 0, '{\"type\":\"legacyInterAgentMessage\",\"id\":\"old-id\"}')",
+    )
+    .bind(thread_id.to_string())
+    .execute(&pool)
+    .await
+    .expect("insert stale legacy row");
+    sqlx::query("UPDATE thread_turns SET status = 'sentinel' WHERE thread_id = ?")
+        .bind(thread_id.to_string())
+        .execute(&pool)
+        .await
+        .expect("mark projected turn");
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("rebuild rollout containing a retired record");
+
+    let stale_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM thread_items WHERE thread_id = ? AND item_id = 'old-id'",
+    )
+    .bind(thread_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("count stale rows");
+    assert_eq!(stale_rows, 0);
+    let status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM thread_turns WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .fetch_one(&pool)
+            .await
+            .expect("read projected turn");
+    assert_eq!(status, "completed");
+    assert_eq!(projection_state(&pool, thread_id).await.1, 4);
+}
+
+const CRASH_RESIDUE: &str = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+async fn crash_residue_projection_fixture() -> (
+    TempDir,
+    LocalThreadStore,
+    ThreadId,
+    std::path::PathBuf,
+    sqlx::SqlitePool,
+    (i64, i64),
+) {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    store
+        .persist_thread(thread_id, PersistContext::Standard)
+        .await
+        .expect("persist session metadata");
+    let pool = codex_state::open_thread_history_db(&codex_state::SqliteConfig::new_for_testing(
+        home.path().abs(),
+    ))
+    .await
+    .expect("open thread history db");
+    let before = projection_state(&pool, thread_id).await;
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    (home, store, thread_id, rollout_path, pool, before)
+}
+
+/// One committed external input and its paired response item, as the live writer persists them.
+fn external_input_pair(thread_id: ThreadId, turn_id: &str) -> [RolloutItem; 2] {
+    use codex_protocol::external_input::Commit;
+    use codex_protocol::external_input::Delivery;
+    use codex_protocol::external_input::Envelope;
+    use codex_protocol::external_input::Message;
+    use codex_protocol::external_input::Receipt;
+    use codex_protocol::external_input::Source;
+    use codex_protocol::external_input::SourceKind;
+    use codex_protocol::external_input_record::Fact;
+    use codex_protocol::external_input_record::Record;
+
+    let mut envelope = Envelope {
+        view: None,
+        version: 1,
+        owner_id: "owner".into(),
+        thread_id: thread_id.to_string(),
+        runtime_generation: 1,
+        message: Message {
+            id: "message".into(),
+            source: Source {
+                kind: SourceKind::Agent,
+                id: "requester".into(),
+            },
+            event_type: "ASK".into(),
+            delivery: Delivery::AfterTurn,
+            text: "pending external input".into(),
+        },
+        semantic_sha256: String::new(),
+    };
+    envelope.semantic_sha256 = envelope.digest();
+    let commit = Commit {
+        receipt: Receipt::new(&envelope, turn_id.into(), 1).expect("receipt"),
+        envelope,
+    };
+    let response = commit.envelope.response_item().expect("response item");
+    [
+        RolloutItem::ExternalInput(Record {
+            version: 1,
+            owner_id: "owner".into(),
+            thread_id: thread_id.to_string(),
+            fact: Fact::Commit {
+                commit: Box::new(commit),
+            },
+        }),
+        RolloutItem::ResponseItem(response.into()),
+    ]
+}
+
+#[tokio::test]
+async fn crash_residue_line_is_skipped_and_later_history_projects() {
+    let (_home, store, thread_id, rollout_path, pool, before) =
+        crash_residue_projection_fixture().await;
+    let suffix = format!(
+        "{}\n{CRASH_RESIDUE}\n{}\n",
+        rollout_line(Some(1), turn_started("turn-1")),
+        rollout_line(Some(2), turn_completed("turn-1")),
+    );
+    append_suffix(rollout_path.as_path(), suffix.as_str());
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("skip crash residue line");
+
+    let expected_offset = before.0 + i64::try_from(suffix.len()).expect("suffix byte count");
+    assert_eq!(
+        projection_state(&pool, thread_id).await,
+        (expected_offset, 3)
+    );
+    let status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM thread_turns WHERE thread_id = ? AND turn_id = 'turn-1'",
+    )
+    .bind(thread_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("read projected turn");
+    assert_eq!(status, "completed");
+}
+
+#[tokio::test]
+async fn crash_residue_tail_without_newline_keeps_checkpoint_until_terminated() {
+    let (_home, store, thread_id, rollout_path, pool, before) =
+        crash_residue_projection_fixture().await;
+    let complete = format!("{}\n", rollout_line(Some(1), turn_started("turn-1")));
+    append_suffix(
+        rollout_path.as_path(),
+        format!("{complete}{CRASH_RESIDUE}").as_str(),
+    );
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("project complete prefix before crash residue");
+    let checkpoint = before.0 + i64::try_from(complete.len()).expect("complete byte count");
+    assert_eq!(projection_state(&pool, thread_id).await, (checkpoint, 2));
+
+    // The next writer terminates the residue with a newline before its first record.
+    let after_reboot = format!("\n{}\n", rollout_line(Some(2), turn_completed("turn-1")));
+    append_suffix(rollout_path.as_path(), after_reboot.as_str());
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("skip terminated crash residue");
+    let rollout_len = i64::try_from(fs::metadata(&rollout_path).expect("metadata").len())
+        .expect("rollout length");
+    assert_eq!(projection_state(&pool, thread_id).await, (rollout_len, 3));
+}
+
+#[tokio::test]
+async fn pending_external_input_with_crash_residue_tail_projects_and_rebuilds() {
+    let (_home, store, thread_id, rollout_path, pool, before) =
+        crash_residue_projection_fixture().await;
+    let [commit, response] = external_input_pair(thread_id, "turn-1");
+    let complete = format!(
+        "{}\n{}\n{}\n",
+        rollout_line(Some(1), turn_started("turn-1")),
+        rollout_line(Some(2), commit),
+        rollout_line(Some(3), response),
+    );
+    append_suffix(
+        rollout_path.as_path(),
+        format!("{complete}{CRASH_RESIDUE}").as_str(),
+    );
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("external input pair before crash residue projects");
+    let checkpoint = before.0 + i64::try_from(complete.len()).expect("complete byte count");
+    assert_eq!(projection_state(&pool, thread_id).await, (checkpoint, 4));
+
+    // An index rebuild reads the whole file; the unterminated residue is not a partial record.
+    sqlx::query(
+        "UPDATE thread_history_projection_state SET external_input_version = 3 WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .execute(&pool)
+    .await
+    .expect("force rebuild");
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("rebuild with crash residue tail");
+    assert_eq!(projection_state(&pool, thread_id).await, (checkpoint, 4));
+}
+
+#[tokio::test]
+async fn malformed_line_after_pending_external_input_still_fails() {
+    let (_home, store, thread_id, rollout_path, _pool, _before) =
+        crash_residue_projection_fixture().await;
+    let [commit, _response] = external_input_pair(thread_id, "turn-1");
+    append_suffix(
+        rollout_path.as_path(),
+        format!(
+            "{}\n{}\n{{not json}}\n",
+            rollout_line(Some(1), turn_started("turn-1")),
+            rollout_line(Some(2), commit),
+        )
+        .as_str(),
+    );
+
+    let err = super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect_err("malformed line while an external input is pending");
+    assert!(
+        err.to_string()
+            .contains("unreadable history during external input projection"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn torn_record_with_nul_bytes_after_pending_external_input_is_crash_residue() {
+    let (_home, store, thread_id, rollout_path, pool, before) =
+        crash_residue_projection_fixture().await;
+    let [commit, response] = external_input_pair(thread_id, "turn-1");
+    let complete = format!(
+        "{}\n{}\n{{\"timestamp\":\"x\",\0\0\0\n{}\n",
+        rollout_line(Some(1), turn_started("turn-1")),
+        rollout_line(Some(2), commit),
+        rollout_line(Some(3), response),
+    );
+    let torn_tail = "{\"timestamp\":\"x\",\"type\":\0\0\0\0";
+    append_suffix(
+        rollout_path.as_path(),
+        format!("{complete}{torn_tail}").as_str(),
+    );
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("torn record is skipped as crash residue");
+    let checkpoint = before.0 + i64::try_from(complete.len()).expect("complete byte count");
+    assert_eq!(projection_state(&pool, thread_id).await, (checkpoint, 4));
+
+    // An index rebuild reads the whole file; the unterminated torn tail is not a partial record.
+    sqlx::query(
+        "UPDATE thread_history_projection_state SET external_input_version = 3 WHERE thread_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .execute(&pool)
+    .await
+    .expect("force rebuild");
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("rebuild with torn crash residue tail");
+    assert_eq!(projection_state(&pool, thread_id).await, (checkpoint, 4));
+}
+
+/// Rollouts written by a newer native (0.162+) persist the `partial_answer` message phase; this
+/// build must project them so it stays a valid rollback target.
+#[tokio::test]
+async fn partial_answer_phase_projects_and_is_not_the_final_answer() {
+    let (_home, store, thread_id, rollout_path, pool, before) =
+        crash_residue_projection_fixture().await;
+    let partial_response = RolloutItem::ResponseItem(
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "partial".to_string(),
+            }],
+            phase: Some(MessagePhase::PartialAnswer),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    let suffix = format!(
+        "{}\n{}\n{}\n{}\n{}\n",
+        rollout_line(Some(1), turn_started("turn-1")),
+        rollout_line(Some(2), partial_response),
+        rollout_line(
+            Some(3),
+            completed_item(
+                thread_id,
+                "turn-1",
+                agent_message("partial-1", MessagePhase::PartialAnswer),
+            ),
+        ),
+        rollout_line(
+            Some(4),
+            completed_item(
+                thread_id,
+                "turn-1",
+                agent_message("final-1", MessagePhase::FinalAnswer),
+            ),
+        ),
+        rollout_line(Some(5), turn_completed("turn-1")),
+    );
+    assert_eq!(suffix.matches("\"phase\":\"partial_answer\"").count(), 2);
+    append_suffix(rollout_path.as_path(), suffix.as_str());
+
+    super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
+        .await
+        .expect("project partial answer phase");
+
+    let expected_offset = before.0 + i64::try_from(suffix.len()).expect("suffix byte count");
+    assert_eq!(
+        projection_state(&pool, thread_id).await,
+        (expected_offset, 6)
+    );
+    let (status, final_agent_item_id) = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT status, final_agent_item_id FROM thread_turns WHERE thread_id = ? AND turn_id = 'turn-1'",
+    )
+    .bind(thread_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("read projected turn");
+    assert_eq!(
+        (status.as_str(), final_agent_item_id.as_deref()),
+        ("completed", Some("final-1"))
+    );
+    let partial_json = sqlx::query_scalar::<_, String>(
+        "SELECT item_json FROM thread_items WHERE thread_id = ? AND item_id = 'partial-1'",
+    )
+    .bind(thread_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .expect("read projected partial answer item");
+    assert!(partial_json.contains("partial_answer"), "{partial_json}");
+}

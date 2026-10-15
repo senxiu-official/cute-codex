@@ -149,6 +149,7 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
+            cutex_quota_minute: None,
             pending_rate_limit_reset_request_id: None,
             pending_rate_limit_reset_idempotency_key: None,
             rate_limit_reset_picker_request_id: None,
@@ -247,6 +248,7 @@ impl ChatWidget {
             suppress_session_configured_redraw: false,
             suppress_initial_user_message_submit: false,
             pending_notification: None,
+            notification_control: Default::default(),
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
@@ -320,6 +322,10 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_token_activity_command_enabled(widget.has_codex_backend_auth);
+        widget.bottom_pane.sync_model_sparkle(
+            widget.effective_collaboration_mode().model(),
+            &widget.local_settings.tui,
+        );
         widget.refresh_status_surfaces();
 
         widget

@@ -511,6 +511,30 @@ pub fn with_app_plugin_sources(
     connectors
 }
 
+pub(crate) fn mcp_approvals_reviewer_for_model(
+    config_layer_stack: &codex_config::ConfigLayerStack,
+    default_reviewer: ApprovalsReviewer,
+    model: &codex_protocol::openai_models::ModelInfo,
+    server_name: &str,
+    connector_id: Option<&str>,
+    link_id: Option<&str>,
+) -> ApprovalsReviewer {
+    if config_layer_stack
+        .requirements()
+        .auto_review_required_for_model_info(model)
+    {
+        return ApprovalsReviewer::AutoReview;
+    }
+    mcp_approvals_reviewer_from_layers(
+        config_layer_stack,
+        default_reviewer,
+        Some(&model.slug),
+        server_name,
+        connector_id,
+        link_id,
+    )
+}
+
 pub(crate) fn mcp_approvals_reviewer_from_layers(
     config_layer_stack: &codex_config::ConfigLayerStack,
     default_reviewer: ApprovalsReviewer,

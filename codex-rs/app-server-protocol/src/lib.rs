@@ -69,3 +69,5 @@ pub(crate) use codex_app_server_protocol_noop_macros::TS;
 pub(crate) use schemars::JsonSchema;
 #[cfg(test)]
 pub(crate) use ts_rs::TS;
+
+pub use protocol::external_input_projection::ExternalInputProjection;

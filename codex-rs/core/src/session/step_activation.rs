@@ -35,13 +35,12 @@ fn check_legacy_turn_safety(
 ) -> Result<(), String> {
     let stack = &live_config.config_layer_stack;
     let requirements = stack.requirements();
-    let required_review = requirements
-        .auto_review_required_for_model(destination.selected_collaboration_mode().model());
+    let required_review = requirements.auto_review_required_for_model_info(&destination.model_info);
     let admitted_required_review = turn_context
         .config
         .config_layer_stack
         .requirements()
-        .auto_review_required_for_model(&turn_context.model_info().slug);
+        .auto_review_required_for_model_info(turn_context.model_info());
     let ignored_models = stack
         .requirements_toml()
         .auto_review
@@ -49,7 +48,11 @@ fn check_legacy_turn_safety(
         .and_then(|review| review.ignore_rules.as_ref());
     let ignores_prefix_rules = |model: &ModelInfo| {
         model.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER)
-            || ignored_models.is_some_and(|models| models.contains(&model.slug))
+            || ignored_models.is_some_and(|models| {
+                models
+                    .iter()
+                    .any(|candidate| candidate == &model.slug || candidate == model.request_model())
+            })
     };
 
     // Approval policy and required-model classification still have consumers
@@ -59,9 +62,7 @@ fn check_legacy_turn_safety(
     {
         return Err("the destination changes the admitted approval policy".to_string());
     }
-    if required_review
-        != requirements
-            .auto_review_required_for_model(current.selected_collaboration_mode().model())
+    if required_review != requirements.auto_review_required_for_model_info(&current.model_info)
         || required_review != admitted_required_review
     {
         return Err("the destination changes model-required approval authority".to_string());

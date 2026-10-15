@@ -2010,6 +2010,30 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
 }
 
 #[tokio::test]
+async fn replayed_token_usage_refreshes_cutex_context_remaining() {
+    let mut app = make_test_app().await;
+    app.chat_widget.setup_status_line(
+        vec![crate::bottom_pane::StatusLineItem::CutexContextRemaining],
+        /*use_theme_colors*/ true,
+    );
+
+    // The test app starts with a fresh-session context state; replayed token usage
+    // must replace this initial surface with the thread's authoritative values.
+    assert_eq!(app.chat_widget.status_line_text(), Some("C 100%".into()));
+
+    let mut notification = token_usage_notification(ThreadId::new(), "turn-1", Some(112_000));
+    let ServerNotification::ThreadTokenUsageUpdated(updated) = &mut notification else {
+        unreachable!("token usage helper must build a token notification");
+    };
+    updated.token_usage.last.total_tokens = 48_000;
+    updated.token_usage.compaction_count = Some(2);
+
+    app.handle_thread_event_replay(ThreadBufferedEvent::Notification(Box::new(notification)));
+
+    assert_eq!(app.chat_widget.status_line_text(), Some("C 64% [2]".into()));
+}
+
+#[tokio::test]
 async fn collab_receiver_notification_caches_thread_without_app_server_read() {
     let mut app = make_test_app().await;
     let receiver_thread_id =
@@ -5194,6 +5218,7 @@ async fn side_thread_snapshot_hides_forked_parent_transcript() {
     let session = ThreadSessionState {
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         forked_from_id: Some(parent_thread_id),
+        presentation_timeline: None,
         fork_parent_title: None,
         ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
     };
@@ -5262,6 +5287,7 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
         session: Some(ThreadSessionState {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             forked_from_id: Some(parent_thread_id),
+            presentation_timeline: None,
             fork_parent_title: None,
             ..test_thread_session(side_thread_id, test_path_buf("/tmp/side"))
         }),
@@ -5838,6 +5864,7 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
             forked_from_id: None,
+            presentation_timeline: None,
             fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
@@ -6444,6 +6471,7 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-test".to_string(),
@@ -7151,6 +7179,7 @@ fn token_usage_notification(
                 reasoning_output_tokens: 0,
             },
             model_context_window,
+            compaction_count: None,
         },
     })
 }
@@ -7436,6 +7465,28 @@ fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
 }
 
 #[test]
+fn missing_steer_method_uses_queue_but_other_rpc_failures_do_not() {
+    for (method, code, queues) in [
+        ("turn/steer", -32601, true),
+        ("turn/steer", -32603, false),
+        ("turn/start", -32601, false),
+    ] {
+        let error = TypedRequestError::Server {
+            method: method.to_string(),
+            source: JSONRPCErrorError {
+                code,
+                message: "Method not supported".into(),
+                data: None,
+            },
+        };
+        assert_eq!(
+            active_turn_not_steerable_turn_error(&error).is_some(),
+            queues
+        );
+    }
+}
+
+#[test]
 fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
     let turn_error = AppServerTurnError {
         misalignment: None,
@@ -7543,6 +7594,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
             forked_from_id: None,
+            presentation_timeline: None,
             fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
@@ -7616,6 +7668,7 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: base_id,
             forked_from_id: None,
+            presentation_timeline: None,
             fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
@@ -8911,6 +8964,7 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
             forked_from_id: None,
+            presentation_timeline: None,
             fork_parent_title: None,
             thread_name: None,
             model: "gpt-test".to_string(),
@@ -9662,6 +9716,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
             forked_from_id: None,
+            presentation_timeline: None,
             fork_parent_title: None,
             thread_name: Some("keep me".to_string()),
             model: "gpt-test".to_string(),

@@ -504,6 +504,13 @@ pub(super) fn create_auth_storage(
     mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Arc<dyn AuthStorageBackend> {
+    if let Some(selected) = super::selected_file::selected() {
+        return if mode == AuthCredentialsStoreMode::File {
+            selected
+        } else {
+            Arc::new(super::selected_file::ConflictingStorage)
+        };
+    }
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
     create_auth_storage_with_store(codex_home, mode, keyring_store, keyring_backend_kind)
 }

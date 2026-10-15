@@ -136,6 +136,12 @@ mod worktree_browser;
 pub use custom_terminal::Terminal;
 mod assistant_directives;
 mod auto_review_denials;
+mod custom_status_items;
+mod cutex_agent_status;
+mod cutex_custom_limit;
+mod cutex_status_presentation;
+mod cutex_version_status;
+mod cutex_workdir;
 mod cwd_prompt;
 mod debug_config;
 mod diff_model;
@@ -157,6 +163,7 @@ mod hooks_rpc;
 mod ide_context;
 mod inline_visualization;
 pub(crate) mod insert_history;
+mod status_animation;
 pub use insert_history::insert_history_lines;
 mod footer_hint;
 mod key_hint;
@@ -1089,6 +1096,7 @@ pub async fn run_main(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    custom_status_items::initialize(cli.status_items_file.as_deref())?;
     system_motion::initialize().await;
     startup_recovery::scope(async move {
         // Startup retains a large future for the whole session. Keep it off callers' stacks,

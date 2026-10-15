@@ -106,6 +106,7 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::config_types::ToolSchemaCompat;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchConfig;
@@ -1018,6 +1019,10 @@ pub struct Config {
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
+    /// Compatibility lowering applied to tool parameter schemas right before
+    /// they are serialized into a model request (`tool_schema_compat`).
+    pub tool_schema_compat: ToolSchemaCompat,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
@@ -1091,6 +1096,9 @@ pub struct Config {
 
     /// Idle timeout for unsubscribed app-server threads, resolved at server startup.
     pub thread_unload_delay: Duration,
+
+    /// Whether subscriber loss can automatically unload an idle app-server thread.
+    pub thread_unload_enabled: bool,
 
     /// Compatibility-only settings retained for legacy `ghost_snapshot`
     /// config loading.
@@ -4417,6 +4425,7 @@ impl Config {
             model_reasoning_summary: cfg.model_reasoning_summary,
             model_catalog,
             model_verbosity: cfg.model_verbosity,
+            tool_schema_compat: cfg.tool_schema_compat.unwrap_or_default(),
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
@@ -4458,6 +4467,7 @@ impl Config {
             code_mode,
             background_terminal_max_timeout,
             thread_unload_delay,
+            thread_unload_enabled: cfg.thread_unload_enabled.unwrap_or(true),
             ghost_snapshot,
             multi_agent_v2,
             token_budget,

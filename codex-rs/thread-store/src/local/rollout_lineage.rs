@@ -141,6 +141,17 @@ impl LocalThreadStore {
                     "source rollout is not paginated",
                 ));
             }
+            if super::thread_history::projection_state(self, rollout_id)
+                .await?
+                .is_none_or(|state| state.external_input_version < 4)
+            {
+                super::thread_history_materialization::materialize_to_sqlite(
+                    self,
+                    rollout_id,
+                    &rollout_path,
+                )
+                .await?;
+            }
             let rollout_path = match representation {
                 LineageRepresentation::Existing => rollout_path,
                 LineageRepresentation::PlainForReference

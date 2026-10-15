@@ -431,6 +431,14 @@ pub(crate) enum AppEvent {
     },
 
     /// One background-loaded page of older Ctrl+T transcript history.
+    /// Read-only recovery at a finite synchronization point.
+    ReconcilePresentations {
+        thread_id: ThreadId,
+    },
+    PresentationTimelineLoaded {
+        thread_id: ThreadId,
+        result: Result<Vec<codex_app_server_protocol::ThreadTimelineEntry>, String>,
+    },
     OlderThreadHistoryLoaded {
         thread_id: ThreadId,
         cursor: String,
@@ -702,6 +710,12 @@ pub(crate) enum AppEvent {
     /// Clear the current thread goal.
     ClearThreadGoal {
         thread_id: ThreadId,
+    },
+
+    ProviderRateLimitsLoaded {
+        request_id: u64,
+        data: crate::status::StatusRateLimitData,
+        snapshots: Vec<codex_app_server_protocol::RateLimitSnapshot>,
     },
 
     /// Result of refreshing rate limits.

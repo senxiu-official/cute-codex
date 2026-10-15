@@ -81,6 +81,21 @@ impl App {
         app_server: &AppServerSession,
         origin: RateLimitRefreshOrigin,
     ) {
+        if self.chat_widget.config_ref().model_provider_id == "cute-claude"
+            && let RateLimitRefreshOrigin::StatusCommand { request_id } = origin
+        {
+            let handle = app_server.request_handle();
+            let tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                let (data, snapshots) = crate::status::provider_limits::fetch(handle).await;
+                tx.send(AppEvent::ProviderRateLimitsLoaded {
+                    request_id,
+                    data,
+                    snapshots,
+                });
+            });
+            return;
+        }
         if matches!(
             origin,
             RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::ResetConsume { .. }
@@ -227,7 +242,7 @@ impl App {
     pub(super) fn refresh_startup_skills(&mut self, app_server: &AppServerSession) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        let cwd = self.config.cwd.to_path_buf();
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         tokio::spawn(async move {
             let result = fetch_skills_list(request_handle, cwd.clone())
                 .await

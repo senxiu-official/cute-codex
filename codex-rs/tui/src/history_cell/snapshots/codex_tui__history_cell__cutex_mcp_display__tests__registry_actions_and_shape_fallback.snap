@@ -1,0 +1,34 @@
+---
+source: tui/src/history_cell/cutex_mcp_display_tests.rs
+expression: "headers.join(\"\\n\")"
+---
+• Creating agent · worker
+• Created agent · worker
+• Querying managed agents
+• Queried managed agents
+• Bringing agent online · worker
+• Agent online action recorded · worker
+• Taking agent offline · worker
+• Agent offline action recorded · worker
+• Restarting agent · worker
+• Agent restart recorded · worker
+• Closing agent · worker
+• Agent close recorded · worker
+• Replacing agent · old
+• Replaced agent · old
+• Rotating director · worker
+• Rotated director · worker
+• Starting task · assignment
+• Started task · assignment
+• Reporting task status · assignment
+• Reported task status · assignment
+• Blocking task · assignment
+• Blocked task · assignment
+• Resuming task · assignment
+• Resumed task · assignment
+• Submitting task result · assignment
+• Submitted task result · assignment
+• Declining task · assignment
+• Declined task · assignment
+• Aborting task attempt · assignment
+• Aborted task attempt · assignment

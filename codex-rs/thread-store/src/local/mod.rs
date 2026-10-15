@@ -8,6 +8,8 @@ mod model_context;
 mod move_thread_to_section;
 mod paginated_fork;
 mod pending_thread_metadata;
+mod presentation_history;
+mod presentation_retention;
 mod projects;
 mod read_thread;
 mod revert_thread;
@@ -148,6 +150,8 @@ pub struct LocalThreadStore {
     writer_lock_coordinator: Arc<WriterLockCoordinator>,
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
+    legacy_timeline: Arc<Mutex<Option<thread_history::CachedTimeline>>>,
+    presentation_validation: Arc<Mutex<Option<presentation_history::ValidationStamp>>>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
 }
 
@@ -266,6 +270,8 @@ impl LocalThreadStore {
             writer_lock_coordinator,
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
+            legacy_timeline: Arc::new(Mutex::new(None)),
+            presentation_validation: Arc::new(Mutex::new(None)),
             thread_data_cleanup: None,
         }
     }
@@ -570,6 +576,13 @@ impl ThreadStore for LocalThreadStore {
         Box::pin(LocalThreadStore::load_history(self, params))
     }
 
+    fn load_presentation_history(
+        &self,
+        params: LoadThreadHistoryParams,
+    ) -> ThreadStoreFuture<'_, StoredThreadHistory> {
+        Box::pin(presentation_history::load(self, params))
+    }
+
     fn load_latest_model_context(
         &self,
         params: LoadThreadHistoryParams,
@@ -746,9 +759,28 @@ impl ThreadStore for LocalThreadStore {
         params: UpdateThreadMetadataParams,
     ) -> ThreadStoreFuture<'_, Option<StoredThread>> {
         Box::pin(async move {
-            update_thread_metadata::update_thread_metadata(self, params)
-                .await
-                .map(Some)
+            update_thread_metadata::update_thread_metadata(
+                self,
+                params,
+                update_thread_metadata::MetadataWritePolicy::Compatible,
+            )
+            .await
+            .map(Some)
+        })
+    }
+
+    fn publish_thread_metadata(
+        &self,
+        params: UpdateThreadMetadataParams,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            update_thread_metadata::update_thread_metadata(
+                self,
+                params,
+                update_thread_metadata::MetadataWritePolicy::Required,
+            )
+            .await
+            .map(|_| ())
         })
     }
 

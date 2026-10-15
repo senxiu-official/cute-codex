@@ -31,6 +31,8 @@ pub(super) fn exclusion(
 ) -> Option<&'static str> {
     if cli.no_daemon {
         Some("--no-daemon")
+    } else if codex_login::explicit_auth_file_selected() {
+        Some("explicit authentication file")
     } else if cli.oss {
         Some("--oss")
     } else if workload_identity_selected {

@@ -136,6 +136,11 @@ fn invalid_response_becomes_remote_control_jsonrpc_error() {
             message: Box::new(OutgoingMessage::Response(OutgoingResponse {
                 id: RequestId::Integer(7),
                 result: Box::new(ClientResponsePayload::Initialize(InitializeResponse {
+                    external_input_version: None,
+                    external_input_versions: None,
+                    presentation_version: None,
+                    external_input_deliveries: None,
+                    external_input_control_version: None,
                     user_agent: "codex-test-agent".to_string(),
                     codex_home,
                     platform_family: "unix".to_string(),

@@ -74,12 +74,16 @@ async fn browsing_loads_before_the_oldest_prompt_after_a_partial_answer() -> Res
             app.transcript_view.history,
             TranscriptHistoryState::LoadingOlder
         );
-        let first_event = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), event_rx.recv())
-            .await?
-            .expect("older history completion");
-        let AppEvent::OlderThreadHistoryLoaded { cursor, .. } = first_event else {
-            panic!("expected an older history completion")
-        };
+        let cursor = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+            loop {
+                match event_rx.recv().await.expect("older history completion") {
+                    AppEvent::OlderThreadHistoryLoaded { cursor, .. } => break cursor,
+                    AppEvent::ReconcilePresentations { .. } => {}
+                    other => panic!("unexpected pagination event: {other:?}"),
+                }
+            }
+        })
+        .await?;
         // Repeated navigation while loading must keep a single request in flight.
         for code in [KeyCode::Left, KeyCode::Char('h')] {
             app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(code.into()))

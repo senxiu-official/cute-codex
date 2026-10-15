@@ -423,6 +423,37 @@ fn slash_popup_preserves_footer_and_selection_style() {
 }
 
 #[test]
+fn two_status_rows_survive_help_and_clipping_without_duplication() {
+    let mut composer = composer();
+    composer.set_status_line_rows(vec![
+        Line::from("agent first row"),
+        Line::from("quota second row"),
+    ]);
+    for help in [false, true] {
+        if help {
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        }
+        for height in [None, Some(8)] {
+            let (text, cursor) = render_with_height(&composer, 80, None, height);
+            assert_eq!(text.matches("agent first row").count(), 1);
+            assert_eq!(text.matches("quota second row").count(), 1);
+            assert!(text.find("agent first row") < text.find("quota second row"));
+            assert!(cursor.is_some());
+        }
+    }
+    let area = Rect::new(0, 0, 40, 1);
+    let mut buf = Buffer::empty(area);
+    composer.render_status_surface(area, &mut buf, ComposerRenderOptions::default());
+    let text = buf
+        .content
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(text.contains("agent first row"));
+    assert!(!text.contains("quota second row"));
+}
+
+#[test]
 fn activity_shortcut_help_follows_runtime_binding() {
     let mut snapshots = Vec::new();
     for configured in [

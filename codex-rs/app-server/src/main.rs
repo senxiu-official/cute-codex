@@ -30,6 +30,18 @@ const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_C
 #[derive(Debug, Parser)]
 #[command(version)]
 struct AppServerArgs {
+    /// Report named model-configuration support without loading config or credentials.
+    #[arg(long)]
+    model_variants_capability: bool,
+    /// Report persistent-thread support without loading config or credentials.
+    #[arg(long)]
+    thread_retention_capability: bool,
+    /// Use this private auth file independently of CODEX_HOME (Linux and Windows).
+    #[arg(long, value_name = "ABS_PATH")]
+    auth_file: Option<PathBuf>,
+    /// Read an ExternalInput launch binding (private socket or authenticated Windows loopback).
+    #[arg(long, value_name = "ABS_PATH")]
+    external_input_binding_file: Option<PathBuf>,
     #[command(flatten)]
     config_overrides: CliConfigOverrides,
 
@@ -77,9 +89,22 @@ struct AppServerArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    // The daemon probes a pinned binary before launching it. Handle the exact
+    // probe before arg0 dispatch, which loads .env and creates helper aliases.
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() == Some(std::ffi::OsStr::new("--thread-retention-capability"))
+        && args.next().is_none()
+    {
+        println!("{{\"threadRetentionVersion\":1}}");
+        return Ok(());
+    }
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
         let AppServerArgs {
+            model_variants_capability,
+            thread_retention_capability,
+            auth_file,
+            external_input_binding_file,
             config_overrides,
             code_mode_host,
             listen,
@@ -91,6 +116,15 @@ fn main() -> anyhow::Result<()> {
             remote_control,
             managed_daemon,
         } = AppServerArgs::parse();
+        if model_variants_capability {
+            println!("{{\"modelVariants\":true}}");
+            return Ok(());
+        }
+        if thread_retention_capability {
+            println!("{{\"threadRetentionVersion\":1}}");
+            return Ok(());
+        }
+        codex_login::configure_auth_file(auth_file)?;
         let loader_overrides = if disable_managed_config_from_debug_env() {
             LoaderOverrides::without_managed_config_for_tests()
         } else {
@@ -101,6 +135,7 @@ fn main() -> anyhow::Result<()> {
         let transport = listen;
         let auth = auth.try_into_settings()?;
         let mut runtime_options = AppServerRuntimeOptions {
+            external_input_binding_file,
             code_mode_host_transport: code_mode_host.into(),
             managed_daemon,
             ..Default::default()

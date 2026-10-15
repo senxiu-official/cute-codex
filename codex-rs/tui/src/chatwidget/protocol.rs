@@ -44,6 +44,15 @@ impl ChatWidget {
             self.restore_retry_status_header_if_present();
         }
         match notification {
+            ServerNotification::ThreadPresentationAppended(notification) => {
+                if self
+                    .thread_id()
+                    .is_some_and(|id| id.to_string() == notification.thread_id)
+                {
+                    self.on_presentation(notification.item);
+                }
+            }
+
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.set_token_info(Some(token_usage_info_from_app_server(
                     notification.token_usage,
@@ -379,6 +388,7 @@ impl ChatWidget {
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_)
             | ServerNotification::ProjectChanged(_)
+            | ServerNotification::ThreadExternalInputStatusChanged(_)
             | ServerNotification::ThreadProjectUpdated(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
@@ -579,7 +589,14 @@ impl ChatWidget {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
             }
             item @ ThreadItem::McpToolCall { .. } => self.on_mcp_tool_call_started(item),
-            item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
+            item @ ThreadItem::DynamicToolCall { .. } => {
+                if matches!(&item, ThreadItem::DynamicToolCall { namespace, .. } if namespace.as_deref() == Some("claude"))
+                {
+                    self.on_claude_tool(item);
+                } else {
+                    self.on_dynamic_tool_item(item);
+                }
+            }
             ThreadItem::WebSearch(item) => {
                 self.on_web_search_begin(item.id);
             }

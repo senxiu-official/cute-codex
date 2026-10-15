@@ -88,6 +88,7 @@ fn test_model_info(
         visibility,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
+        request_model: None,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,

@@ -293,6 +293,33 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn finish_provider_rate_limits(
+        &mut self,
+        request_id: u64,
+        data: crate::status::StatusRateLimitData,
+        snapshots: Vec<RateLimitSnapshot>,
+    ) {
+        if !self
+            .refreshing_status_outputs
+            .iter()
+            .any(|(id, _)| *id == request_id)
+        {
+            return;
+        }
+        for snapshot in snapshots {
+            self.on_rate_limit_snapshot(Some(snapshot));
+        }
+        self.refreshing_status_outputs.retain(|(id, handle)| {
+            if *id == request_id {
+                handle.finish_provider_rate_limits(data.clone());
+                false
+            } else {
+                true
+            }
+        });
+        self.request_redraw();
+    }
+
     pub(crate) fn finish_status_rate_limit_refresh(
         &mut self,
         request_id: u64,
@@ -333,6 +360,12 @@ impl ChatWidget {
     }
 
     pub(super) fn open_status_line_setup(&mut self) {
+        if let Err(error) = crate::app::status_preferences::reload(&mut self.local_settings.tui) {
+            self.add_error_message(format!(
+                "Failed to load shared status line settings: {error}"
+            ));
+            return;
+        }
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
@@ -366,6 +399,7 @@ impl ChatWidget {
         );
         preview_data.thread_id = self.thread_id;
 
+        preview_data.notification_style = self.notification_control.style;
         if self.rate_limit_snapshots_by_limit_id.contains_key("codex") {
             for item in [
                 StatusSurfacePreviewItem::FiveHourLimit,
@@ -414,7 +448,7 @@ impl ChatWidget {
             return None;
         }
         let Some(context_window) = self.status_line_context_window_size() else {
-            return Some(100);
+            return (self.config.model_provider_id != "cute-claude").then_some(100);
         };
         let default_usage = TokenUsage::default();
         let usage = self
@@ -422,6 +456,12 @@ impl ChatWidget {
             .as_ref()
             .map(|info| &info.last_token_usage)
             .unwrap_or(&default_usage);
+        if self.config.model_provider_id == "cute-claude" {
+            return Some(crate::status::provider_limits::context_remaining(
+                usage.tokens_in_context_window(),
+                context_window,
+            ));
+        }
         Some(
             usage
                 .percent_of_context_window_remaining(context_window)

@@ -157,6 +157,10 @@ impl App {
 
     /// Show detailed history in the owned viewport or the inline session's transcript overlay.
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
+        if let Some(thread_id) = self.chat_widget.thread_id() {
+            self.app_event_tx
+                .send(AppEvent::ReconcilePresentations { thread_id });
+        }
         if tui.is_owned_screen() {
             self.transcript_view.set_presentation(
                 /*detailed*/ true,

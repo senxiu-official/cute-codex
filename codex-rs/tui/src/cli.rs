@@ -9,6 +9,9 @@ use codex_utils_cli::SharedCliOptions;
 #[derive(Parser, Clone, Debug)]
 #[command(version)]
 pub struct Cli {
+    /// Load reviewed static statusline display values (v1 JSON), once for this TUI.
+    #[arg(long, value_name = "ABS_PATH")]
+    pub status_items_file: Option<std::path::PathBuf>,
     /// Internal: launching CLI that handles daemon updates after the TUI exits.
     #[clap(skip)]
     pub daemon_cli_executable: Option<AbsolutePathBuf>,

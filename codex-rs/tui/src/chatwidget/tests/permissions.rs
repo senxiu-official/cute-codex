@@ -769,6 +769,7 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-test".to_string(),
@@ -1213,6 +1214,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-test".to_string(),
@@ -1262,6 +1264,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-test".to_string(),
@@ -1471,6 +1474,31 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     assert!(
         rendered.contains("Permissions updated to Full Access"),
         "expected full access update history message, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn claude_permissions_use_native_modes_without_changing_sandbox() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.model_provider_id = "cute-claude".to_string();
+    chat.request_permission_profiles();
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(popup.contains("Update Claude Permissions"));
+    assert!(popup.contains("Approve for me"));
+    assert!(!popup.contains("access the internet or edit"));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    assert!(matches!(
+        rx.try_recv().expect("permission selection"),
+        AppEvent::CodexOp(AppCommand::OverrideTurnContext {
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permission_profile: None,
+            ..
+        })
+    ));
+    assert!(
+        rx.try_recv().is_err(),
+        "wait for the server snapshot before claiming success"
     );
 }
 

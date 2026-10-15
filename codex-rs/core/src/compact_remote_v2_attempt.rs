@@ -91,7 +91,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         .await;
     responses_metadata.tool_namespaces_info = tool_router.tool_namespaces_info().cloned();
     let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
-        "model": turn_context.model_info().slug.as_str(),
+        "model": step_context.settings.model_info.request_model(),
         "instructions": prompt.base_instructions.text.as_str(),
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,

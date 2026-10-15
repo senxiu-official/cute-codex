@@ -9,6 +9,7 @@ use chrono::TimeZone;
 use codex_protocol::SanitizedGitUrl;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -340,6 +341,80 @@ async fn load_rollout_items_defaults_legacy_session_id() -> std::io::Result<()> 
         })
     ));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_skips_retired_inter_agent_display_lines() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let mut file = File::create(&rollout_path)?;
+    let thread_id = ThreadId::new();
+    let ts = "2025-01-03T12:00:00Z";
+    let session_meta = serde_json::json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {
+            "id": thread_id,
+            "timestamp": ts,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": "test-provider",
+        },
+    });
+    writeln!(file, "{session_meta}")?;
+    for event_type in ["item_started", "item_completed"] {
+        let retired = serde_json::json!({
+            "timestamp": ts,
+            "type": "event_msg",
+            "payload": {
+                "type": event_type,
+                "thread_id": thread_id,
+                "turn_id": "old-turn",
+                "item": {
+                    "type": "InterAgentMessage",
+                    "id": "old-id",
+                    "author": "/root/worker",
+                    "recipient": "/root",
+                    "otherRecipients": [],
+                    "content": "DISPLAY_ONLY_SENTINEL",
+                    "deliveryMode": "interrupt",
+                },
+            },
+        });
+        assert!(crate::is_retired_rollout_line(&retired));
+        assert!(crate::decode_rollout_line(retired.clone()).is_err());
+        writeln!(file, "{retired}")?;
+    }
+    let message = serde_json::json!({
+        "timestamp": ts,
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "hello"}],
+        },
+    });
+    assert!(!crate::is_retired_rollout_line(&message));
+    writeln!(file, "{message}")?;
+    drop(file);
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 2);
+    assert!(matches!(items[0], RolloutItem::SessionMeta(_)));
+    assert!(matches!(
+        items[1],
+        RolloutItem::ResponseItem(ResponseItemEnvelope {
+            item: ResponseItem::Message { .. },
+            ..
+        })
+    ));
     Ok(())
 }
 
@@ -1190,6 +1265,189 @@ async fn append_rollout_item_to_path_assigns_next_paginated_ordinal() -> std::io
 }
 
 #[tokio::test]
+async fn load_rollout_items_skips_crash_residue_line_before_later_records() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_paginated_rollout(&rollout_path, thread_id, &[1])?;
+    // Power loss left a zero-filled range terminated by a newline; records appended after the
+    // reboot follow it.
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    file.write_all(&[0u8; 37])?;
+    file.write_all(b"\n\0\0 \0\r\n")?;
+    drop(file);
+    append_rollout_item_to_path(&rollout_path, &agent_message_item("after reboot")).await?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3);
+    assert!(matches!(
+        &items[2],
+        RolloutItem::EventMsg(EventMsg::AgentMessage(event)) if event.message == "after reboot"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_skips_crash_residue_tail_without_newline() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_paginated_rollout(&rollout_path, thread_id, &[1, 2])?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    file.write_all(&[0u8; 4096])?;
+    drop(file);
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn append_after_crash_residue_tail_starts_a_new_line_and_keeps_prefix() -> std::io::Result<()>
+{
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    write_paginated_rollout(&rollout_path, ThreadId::new(), &[1, 2])?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    file.write_all(&[0u8; 64])?;
+    drop(file);
+    let before = fs::read(&rollout_path)?;
+
+    append_rollout_item_to_path(&rollout_path, &agent_message_item("after reboot")).await?;
+
+    let after = fs::read(&rollout_path)?;
+    // Existing bytes (and therefore stored byte checkpoints) are never rewritten.
+    assert_eq!(&after[..before.len()], before.as_slice());
+    assert_eq!(after[before.len()], b'\n');
+    let appended = std::str::from_utf8(&after[before.len() + 1..]).expect("utf-8 record");
+    let appended = crate::parse_rollout_line(appended.trim_end()).map_err(std::io::Error::other)?;
+    // The ordinal continues after the last valid record, not after the residue.
+    assert_eq!(appended.ordinal, Some(3));
+    let (_items, _thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(parse_errors, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_skips_torn_record_with_nul_bytes_but_counts_malformed_json()
+-> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    write_paginated_rollout(&rollout_path, ThreadId::new(), &[1])?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    // A truncated record followed by NUL bytes is a torn record (crash residue); plain malformed
+    // JSON without NUL bytes keeps counting as a parse error.
+    file.write_all(b"{\"timestamp\":\"2026-07-09T00:00:09Z\",\"ordin\0\0\0\n{not json}\n")?;
+    drop(file);
+
+    let (items, _thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!(parse_errors, 1);
+    assert_eq!(items.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn load_rollout_items_skips_unterminated_torn_record_tail() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_paginated_rollout(&rollout_path, thread_id, &[1, 2])?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    file.write_all(b"{\"timestamp\":\"2026-07-09T00:00:09Z\",\"type\":")?;
+    file.write_all(&[0u8; 4096])?;
+    drop(file);
+    let before = fs::read(&rollout_path)?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!((loaded_thread_id, parse_errors), (Some(thread_id), 0));
+    assert_eq!(items.len(), 3);
+
+    append_rollout_item_to_path(&rollout_path, &agent_message_item("after reboot")).await?;
+    let after = fs::read(&rollout_path)?;
+    // Existing bytes (and therefore stored byte checkpoints) are never rewritten.
+    assert_eq!(&after[..before.len()], before.as_slice());
+    assert_eq!(after[before.len()], b'\n');
+    let (items, _thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!((items.len(), parse_errors), (4, 0));
+    Ok(())
+}
+
+#[test]
+fn crash_residue_line_requires_nul_and_no_valid_record() {
+    assert!(crate::is_crash_residue_line(b"\0"));
+    assert!(crate::is_crash_residue_line(b"\0\0 \t\0\r\n"));
+    assert!(!crate::is_crash_residue_line(b""));
+    assert!(!crate::is_crash_residue_line(b"  \n"));
+    // Torn records: a raw NUL plus anything that does not parse as JSON.
+    assert!(crate::is_crash_residue_line(b"{}\0"));
+    assert!(crate::is_crash_residue_line(b"\0x\0"));
+    assert!(crate::is_crash_residue_line(
+        b"{\"timestamp\":\"2026-07-09T00:00:09Z\",\"ordin\0\0\0\n"
+    ));
+    assert!(crate::is_crash_residue_line(b"{\"text\":\"a\0b\"}\n"));
+    // Without a NUL byte, malformed JSON is never residue, and valid JSON never is.
+    assert!(!crate::is_crash_residue_line(b"{not json}"));
+    assert!(!crate::is_crash_residue_line(b"{\"timestamp\":"));
+    assert!(!crate::is_crash_residue_line(b"{\"text\":\"a\\u0000b\"}\n"));
+}
+
+/// Rollouts written by a newer native (0.162+) persist the `partial_answer` message phase; this
+/// build must read them without parse errors so it stays a valid rollback target.
+#[tokio::test]
+async fn load_rollout_items_reads_partial_answer_phase() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let thread_id = ThreadId::new();
+    write_paginated_rollout(&rollout_path, thread_id, &[1])?;
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    file.write_all(
+        concat!(
+            r#"{"timestamp":"2026-07-09T00:00:09Z","ordinal":2,"type":"response_item","payload":"#,
+            r#"{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}],"#,
+            r#""phase":"partial_answer"}}"#,
+            "\n",
+            r#"{"timestamp":"2026-07-09T00:00:10Z","ordinal":3,"type":"event_msg","payload":"#,
+            r#"{"type":"agent_message","message":"partial","phase":"partial_answer"}}"#,
+            "\n",
+        )
+        .as_bytes(),
+    )?;
+    drop(file);
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+
+    assert_eq!((loaded_thread_id, parse_errors), (Some(thread_id), 0));
+    assert_eq!(items.len(), 4);
+    assert!(matches!(
+        &items[2],
+        RolloutItem::ResponseItem(envelope) if matches!(
+            &envelope.item,
+            ResponseItem::Message { phase: Some(MessagePhase::PartialAnswer), .. }
+        )
+    ));
+    assert!(matches!(
+        &items[3],
+        RolloutItem::EventMsg(EventMsg::AgentMessage(event))
+            if event.phase == Some(MessagePhase::PartialAnswer)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_threads_db_disabled_does_not_skip_paginated_items() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
@@ -1883,4 +2141,33 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         .await
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn resumed_paginated_rollout_keeps_float_token_count_ordinal() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let rollout_path = home.path().join("rollout.jsonl");
+    write_paginated_rollout(&rollout_path, ThreadId::new(), &[473])?;
+    let tail = serde_json::json!({
+        "timestamp": "2026-09-14T06:55:41.571Z", "ordinal": 474,
+        "type": "event_msg", "payload": {"type": "token_count", "info": null,
+            "rate_limits": {"primary": {"used_percent": 59.0, "window_minutes": 10080, "resets_at": 1789805388}}}
+    });
+    let mut file = fs::OpenOptions::new().append(true).open(&rollout_path)?;
+    writeln!(file, "{tail}")?;
+    drop(file);
+    let recorder =
+        RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    recorder
+        .record_canonical_items(&[agent_message_item("after-resume")])
+        .await?;
+    recorder.flush().await?;
+    let contents = fs::read_to_string(&rollout_path)?;
+    let ordinals = contents
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).map(|v| v["ordinal"].as_u64()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(ordinals, vec![Some(0), Some(473), Some(474), Some(475)]);
+    recorder.shutdown().await
 }

@@ -178,6 +178,7 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
         total_token_usage: token_usage.clone(),
         last_token_usage: token_usage,
         model_context_window: None,
+        compaction_count: None,
     };
 
     handle_token_count(&mut chat, Some(token_info));
@@ -233,6 +234,28 @@ async fn token_usage_update_uses_runtime_context_window() {
     assert!(
         !context_line.contains("1M"),
         "expected /status to avoid raw config context window, got: {context_line}"
+    );
+}
+
+#[tokio::test]
+async fn cutex_context_remaining_appends_authoritative_compaction_count() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    let legacy_info = make_token_info(/*total_tokens*/ 0, /*context_window*/ 100_000);
+    chat.set_token_info(Some(legacy_info));
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::CutexContextRemaining),
+        Some("C 100%".to_string())
+    );
+
+    let mut compacted_info = make_token_info(
+        /*total_tokens*/ 68_320, /*context_window*/ 100_000,
+    );
+    compacted_info.compaction_count = Some(2);
+    chat.set_token_info(Some(compacted_info));
+    assert_eq!(
+        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::CutexContextRemaining),
+        Some("C 36% [2]".to_string())
     );
 }
 
@@ -4291,6 +4314,7 @@ async fn session_configured_clears_goal_status_footer() {
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
+        presentation_timeline: None,
         fork_parent_title: None,
         thread_name: None,
         model: "gpt-5.4".to_string(),
@@ -5807,5 +5831,25 @@ async fn chatwidget_tall() {
     assert_chatwidget_snapshot!(
         "chatwidget_tall",
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
+    );
+}
+
+#[tokio::test]
+async fn claude_context_status_uses_observed_window_without_codex_baseline() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.model_provider_id = "cute-claude".into();
+    chat.thread_id = Some(ThreadId::new());
+    chat.local_settings.tui.status_line =
+        Some(vec!["context-used".into(), "context-window-size".into()]);
+    chat.token_info = Some(make_token_info(
+        /*total_tokens*/ 30_000, /*context_window*/ 200_000,
+    ));
+    chat.apply_token_info(chat.token_info.clone().unwrap());
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(85));
+    chat.refresh_status_line();
+    assert_eq!(chat.status_line_context_used_percent(), Some(15));
+    insta::assert_snapshot!(
+        "claude_context_status_line",
+        status_line_text(&chat).unwrap()
     );
 }

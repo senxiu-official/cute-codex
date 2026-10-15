@@ -1356,6 +1356,8 @@ pub struct EnvironmentConnectionEvent {
 #[ts(tag = "type")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
+    /// Durable thread-level display data, excluded from model context.
+    PresentationAppended(crate::presentation::PresentationAppended),
     /// Error while executing a submission
     Error(ErrorEvent),
 

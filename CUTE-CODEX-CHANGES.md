@@ -9,8 +9,9 @@ Authors); files under "Added files" are new in cute-codex and are licensed under
 Apache License, Version 2.0. The exact changes are the difference between `rust-v0.160.0` and this
 release commit.
 
-## Modified upstream files (295)
+## Modified upstream files (299)
 
+- CHANGELOG.md
 - README.md
 - codex-rs/Cargo.lock
 - codex-rs/Cargo.toml
@@ -127,6 +128,7 @@ release commit.
 - codex-rs/core/src/thread_manager.rs
 - codex-rs/core/src/thread_manager_tests.rs
 - codex-rs/core/src/tools/registry.rs
+- codex-rs/core/src/tools/runtimes/mod.rs
 - codex-rs/core/src/tools/spec_plan_tests.rs
 - codex-rs/core/tests/suite/approvals.rs
 - codex-rs/core/tests/suite/auto_review.rs
@@ -145,6 +147,7 @@ release commit.
 - codex-rs/core/tests/suite/scenarios.rs
 - codex-rs/core/tests/suite/spawn_agent_description.rs
 - codex-rs/core/tests/suite/view_image.rs
+- codex-rs/exec-server/src/process_sandbox.rs
 - codex-rs/exec/tests/event_processor_with_json_output.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/approval.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/extension.rs
@@ -186,6 +189,7 @@ release commit.
 - codex-rs/rollout/src/recorder.rs
 - codex-rs/rollout/src/recorder_tests.rs
 - codex-rs/rollout/src/search.rs
+- codex-rs/shell-command/src/shell_detect.rs
 - codex-rs/state/src/extract.rs
 - codex-rs/state/src/runtime/threads.rs
 - codex-rs/thread-manager-sample/src/main.rs

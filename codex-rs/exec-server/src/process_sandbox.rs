@@ -252,7 +252,10 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     #[cfg(windows)]
     let program = if matches!(
         sandbox_context.windows_sandbox_selection,
-        WindowsSandboxSelection::Elevated | WindowsSandboxSelection::Mxc
+        // cute-codex: the restricted-token backend cannot start Store PowerShell either.
+        WindowsSandboxSelection::RestrictedToken
+            | WindowsSandboxSelection::Elevated
+            | WindowsSandboxSelection::Mxc
     ) && Path::new(&program).file_stem().is_some_and(|name| {
         name.eq_ignore_ascii_case("pwsh") || name.eq_ignore_ascii_case("powershell")
     }) && let Some(fallback) =

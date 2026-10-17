@@ -179,9 +179,15 @@ fn prepare_powershell_command_for_windows_sandbox_with_fallback(
 ) -> Vec<String> {
     if shell_type != Some(&ShellType::PowerShell)
         || !sandbox_requested
+        // cute-codex: the restricted-token (unelevated) backend cannot start
+        // Store PowerShell either (CreateProcessAsUserW: access denied on the
+        // app-execution alias and on the package path), so it gets the same
+        // unpackaged fallback as the elevated and MXC backends.
         || !matches!(
             windows_sandbox,
-            WindowsSandboxSelection::Elevated | WindowsSandboxSelection::Mxc
+            WindowsSandboxSelection::RestrictedToken
+                | WindowsSandboxSelection::Elevated
+                | WindowsSandboxSelection::Mxc
         )
         || command.is_empty()
     {
@@ -784,7 +790,44 @@ mod prepare_powershell_command_tests {
     }
 
     #[test]
-    fn leaves_legacy_restricted_token_backend_alone() {
+    fn restricted_token_backend_replaces_store_powershell_without_no_profile() {
+        let command = vec![
+            r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe"
+                .to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+        let fallback_path = std::path::PathBuf::from(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        );
+
+        let rewritten = prepare_powershell_command_for_windows_sandbox_with_fallback(
+            &command,
+            Some(&ShellType::PowerShell),
+            /*sandbox_requested*/ true,
+            WindowsSandboxSelection::RestrictedToken,
+            /*environment_is_remote*/ false,
+            |_| {
+                Some(codex_shell_command::shell_detect::DetectedShell {
+                    shell_type: ShellType::PowerShell,
+                    shell_path: fallback_path.clone(),
+                })
+            },
+        );
+
+        // The restricted token runs as the user, so profiles still load.
+        assert_eq!(
+            rewritten,
+            vec![
+                fallback_path.to_string_lossy().to_string(),
+                "-Command".to_string(),
+                "Write-Output ok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn disabled_sandbox_leaves_store_powershell_alone() {
         let command = vec![
             r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.4.0_x64__8wekyb3d8bbwe\pwsh.exe"
                 .to_string(),
@@ -792,12 +835,13 @@ mod prepare_powershell_command_tests {
             "Write-Output ok".to_string(),
         ];
 
-        let rewritten = prepare_powershell_command_for_windows_sandbox(
+        let rewritten = prepare_powershell_command_for_windows_sandbox_with_fallback(
             &command,
             Some(&ShellType::PowerShell),
             /*sandbox_requested*/ true,
-            WindowsSandboxSelection::RestrictedToken,
+            WindowsSandboxSelection::Disabled,
             /*environment_is_remote*/ false,
+            |_| panic!("no fallback discovery without a Windows sandbox"),
         );
 
         assert_eq!(rewritten, command);

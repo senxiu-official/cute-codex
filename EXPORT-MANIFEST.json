@@ -1,11 +1,11 @@
 {
   "project": "cute-codex",
-  "version": "0.160.0-r52.2",
-  "exportDate": "2026-10-15",
+  "version": "0.160.0-r52.3",
+  "exportDate": "2026-10-17",
   "sourceCommit": null,
   "sourceCommitNote": "withheld: kept in the private export record next to the export directory",
   "license": "Apache-2.0",
-  "fileCount": 448,
+  "fileCount": 452,
   "files": [
     {
       "path": ".github/cute-codex/build-natives.sh",
@@ -14,13 +14,18 @@
     },
     {
       "path": ".github/workflows/cute-codex-build-binaries.yml",
-      "sha256": "e7beeace69ff353fbe74c9edf14be82b9ffc49d5fd4906ad03f4306a97c1e9ca",
-      "size": 4643
+      "sha256": "53934fecc3df4b9f5a5040f1bce156ce12fe16086efcc493ecbc7c97251c6ae1",
+      "size": 5890
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "225f08471de5632c67ae0c3f3f25dd1630ebe7e628da7ab80806988699c71989",
+      "size": 817
     },
     {
       "path": "CUTE-CODEX-CHANGES.md",
-      "sha256": "7c9928e41bdc297b9bdcb0bbc1a4450b32b23d1e707c6a609d8306e1f4e20cc2",
-      "size": 28580
+      "sha256": "bfb42e06bc6d19f2359d988817d21d8dfc9ddd46215d060e630a1318e0f686f5",
+      "size": 28728
     },
     {
       "path": "README.md",
@@ -29,12 +34,12 @@
     },
     {
       "path": "codex-rs/Cargo.lock",
-      "sha256": "2e5b94624ae37c73e1e80826c939f4723b22e46f545d43a3e0108aa1d2a3bf41",
+      "sha256": "0d1f3b031defde45a40da48be840bad25435db87f5c1d1b1f01176a0211cfe27",
       "size": 407874
     },
     {
       "path": "codex-rs/Cargo.toml",
-      "sha256": "ca3d314b775caf9f74af7c8cf0fed6ac898dd0411f0bc6f792e507d738df6c17",
+      "sha256": "fc7c4c9154cd2d42bfb8de2861b418e497552325903f5548f134045be2560ec4",
       "size": 20621
     },
     {
@@ -863,6 +868,11 @@
       "size": 31465
     },
     {
+      "path": "codex-rs/core/src/tools/runtimes/mod.rs",
+      "sha256": "38dec69bcc5e1ece68733002d29a153f4fc329118565f05566d7b81f0a395ffd",
+      "size": 36964
+    },
+    {
       "path": "codex-rs/core/src/tools/spec_plan_tests.rs",
       "sha256": "fc112d96d92ad795bad546195d825685d51f7e9724686d330510566ca43d04bc",
       "size": 123643
@@ -976,6 +986,11 @@
       "path": "codex-rs/exec/tests/event_processor_with_json_output.rs",
       "sha256": "46dfc499cbd480431d3fd3c01e8cec7021d6a064ba48aba1fe7047a4df13be81",
       "size": 65196
+    },
+    {
+      "path": "codex-rs/exec-server/src/process_sandbox.rs",
+      "sha256": "772b633a776846706d78df0dd4e8b059e4890c0c3c161a9bb6af9df2600ad8f9",
+      "size": 18096
     },
     {
       "path": "codex-rs/ext/guardian-v2/src/async_scorer/approval.rs",
@@ -1246,6 +1261,11 @@
       "path": "codex-rs/rollout-trace/src/protocol_event.rs",
       "sha256": "000267c3077cd74df1969c951708b88ea16eea7ff728b93ddfab69091afc68c7",
       "size": 22721
+    },
+    {
+      "path": "codex-rs/shell-command/src/shell_detect.rs",
+      "sha256": "0d85920312aa29373693198476b805221f2b45a735485046ef8a231b3a630906",
+      "size": 16292
     },
     {
       "path": "codex-rs/state/src/extract.rs",

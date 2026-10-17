@@ -132,7 +132,8 @@ fn file_exists(path: &std::path::Path) -> Option<PathBuf> {
     }
 }
 
-// Store PowerShell cannot run under MXC and can be inaccessible to the elevated sandbox account;
+// Store PowerShell cannot run under MXC or the restricted-token backend (CreateProcessAsUserW is
+// denied) and can be inaccessible to the elevated sandbox account;
 // WindowsApps also contains valid Codex frameworks.
 fn is_inaccessible_windows_apps_powershell_path(path: &std::path::Path) -> bool {
     path.as_os_str()

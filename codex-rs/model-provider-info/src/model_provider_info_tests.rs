@@ -96,6 +96,7 @@ base_url = "http://localhost:11434/v1"
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        capabilities: None,
         include_internal_metadata: false,
     };
 
@@ -134,6 +135,7 @@ query_params = { api-version = "2025-04-01-preview" }
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        capabilities: None,
         include_internal_metadata: false,
     };
 
@@ -176,6 +178,7 @@ supports_standalone_web_search = true
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: true,
+        capabilities: None,
         include_internal_metadata: false,
     };
 
@@ -365,6 +368,7 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            capabilities: None,
             include_internal_metadata: false,
         }
     );
@@ -877,4 +881,36 @@ model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
             .base_url,
         "https://gateway.example/v1"
     );
+}
+
+/// Cutex fork: `--auth-file` API-key fallback for env-key providers.
+#[test]
+fn env_key_provider_falls_back_to_auth_file_api_key() {
+    fn reader() -> Option<String> {
+        Some("dummy-auth-file-key".to_string())
+    }
+    let provider = ModelProviderInfo {
+        env_key: Some("CUTEX_TEST_UNSET_PROVIDER_KEY_93c2".to_string()),
+        requires_openai_auth: false,
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+    };
+    // Without a selected auth file the missing variable stays an error.
+    assert!(provider.api_key().is_err());
+    crate::set_auth_file_api_key_reader(reader);
+    assert_eq!(
+        provider.api_key().unwrap().as_deref(),
+        Some("dummy-auth-file-key")
+    );
+    // A non-empty environment variable still wins.
+    let from_env = ModelProviderInfo {
+        env_key: Some("PATH".to_string()),
+        ..provider.clone()
+    };
+    assert_eq!(from_env.api_key().unwrap(), std::env::var("PATH").ok());
+    // Providers that use OpenAI auth never read the file key through `env_key`.
+    let openai_auth = ModelProviderInfo {
+        requires_openai_auth: true,
+        ..provider
+    };
+    assert!(openai_auth.api_key().is_err());
 }

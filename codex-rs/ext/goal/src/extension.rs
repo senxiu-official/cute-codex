@@ -159,6 +159,17 @@ where
             });
             runtime.set_enabled(enabled);
             self.goal_service.register_runtime(&runtime);
+            // Seed the cache that decides whether goal-mutation tools are offered,
+            // so the first request already has the tool list later steps will use.
+            match self
+                .state_dbs
+                .thread_goals()
+                .get_thread_goal(thread_id)
+                .await
+            {
+                Ok(goal) => runtime.goal_presence().set(goal.is_some()),
+                Err(err) => tracing::warn!("failed to read goal at thread start: {err}"),
+            }
         })
     }
 
@@ -183,6 +194,16 @@ where
                 return;
             };
 
+            let accounting = runtime.accounting_state();
+            if let Some(turn_id) = accounting.interrupted_turn_id() {
+                if let Err(err) = runtime
+                    .stop_active_goal_for_turn(&turn_id, ActiveGoalStopReason::EmptyResponse)
+                    .await
+                {
+                    tracing::warn!("failed to stop goal after interrupted empty turns: {err}");
+                }
+                accounting.finish_turn(&turn_id);
+            }
             if let Err(err) = runtime.continue_if_idle().await {
                 tracing::warn!(
                     "failed to continue active goal for idle thread {}: {err}",
@@ -239,6 +260,10 @@ where
                 return;
             };
 
+            let accounting = runtime.accounting_state();
+            let Ok(_turn_start_permit) = accounting.turn_start_permit().await else {
+                return;
+            };
             if let Err(err) = self
                 .state_dbs
                 .thread_goals()
@@ -248,7 +273,6 @@ where
                 tracing::warn!("failed to clear deferred goal continuation: {err}");
             }
 
-            let accounting = runtime.accounting_state();
             accounting.start_turn(
                 input.turn_id,
                 input.collaboration_mode.mode,
@@ -269,6 +293,7 @@ where
             else {
                 return;
             };
+            runtime.goal_presence().set(goal.is_some());
             if let Some(goal) = goal
                 && matches!(
                     goal.status,
@@ -369,13 +394,16 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
-            runtime.accounting_state().reset_empty_responses();
             if !runtime.is_enabled() {
+                runtime.accounting_state().reset_empty_responses();
                 return;
             }
 
             let turn_id = input.turn_store.level_id();
             input.thread_store.remove::<TurnStartOptions>();
+            if input.reason != codex_protocol::protocol::TurnAbortReason::Interrupted {
+                runtime.accounting_state().reset_empty_responses();
+            }
             if let Err(err) = runtime
                 .account_active_goal_progress(
                     turn_id,
@@ -390,7 +418,17 @@ where
                 );
                 return;
             }
-            runtime.accounting_state().finish_turn(turn_id);
+            let accounting = runtime.accounting_state();
+            match input.reason {
+                codex_protocol::protocol::TurnAbortReason::Interrupted => {
+                    accounting.interrupt_turn(turn_id);
+                }
+                codex_protocol::protocol::TurnAbortReason::Replaced
+                | codex_protocol::protocol::TurnAbortReason::ReviewEnded
+                | codex_protocol::protocol::TurnAbortReason::BudgetLimited => {
+                    accounting.finish_turn(turn_id);
+                }
+            }
         })
     }
 
@@ -574,10 +612,17 @@ where
                 self.metrics.clone(),
             ),
         ];
+        // Offering `update_goal` on a thread without a goal invites models to call it
+        // speculatively, and every such call fails. The list changes only when a goal
+        // is created or cleared, so the cached request prefix stays stable otherwise.
+        let goal_presence = runtime.goal_presence();
+        let may_have_goal = goal_presence.may_have_goal();
         tools
             .into_iter()
+            .filter(|tool| may_have_goal || !tool.requires_existing_goal())
             .map(|mut tool| {
                 tool.execution_allowed = runtime.tools_available();
+                tool.goal_presence = Arc::clone(&goal_presence);
                 Arc::new(tool) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
             })
             .collect()

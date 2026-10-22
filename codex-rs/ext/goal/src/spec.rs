@@ -72,6 +72,7 @@ pub fn create_update_goal_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: UPDATE_GOAL_TOOL_NAME.to_string(),
         description: r#"Update the existing goal.
+Only call this when the thread already has a goal (created with create_goal or by the user; check with get_goal). If there is no goal, there is nothing to update: do not call this tool.
 Set status to `paused` only at the user's explicit request to pause this goal, never on your own initiative. Ask if unclear; a later resume revokes that request. Report the returned status and stop goal work. Budget limits take precedence over pausing.
 Set status to `complete` only when the objective has actually been achieved and no required work remains.
 Set status to `blocked` only when the same blocking condition has repeated for at least three consecutive goal turns, counting the original/user-triggered turn and any automatic continuations, and the agent cannot make meaningful progress without user input or an external-state change.

@@ -154,6 +154,10 @@ async fn refusal(session: &Arc<Session>, id: &str) -> BusyReason {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test edits recovery state under the admission lock"
+)]
 async fn exclusive_submit_refuses_busy_without_queueing() {
     let session = session_with_runtime(runtime()).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());

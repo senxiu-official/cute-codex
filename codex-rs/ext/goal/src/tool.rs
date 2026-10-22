@@ -20,6 +20,7 @@ use crate::analytics::GoalAnalytics;
 use crate::analytics::GoalEventAttribution;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
+use crate::runtime::GoalPresence;
 use crate::spec::CREATE_GOAL_TOOL_NAME;
 use crate::spec::GET_GOAL_TOOL_NAME;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
@@ -30,6 +31,7 @@ use crate::spec::create_update_goal_tool;
 #[derive(Clone)]
 pub(crate) struct GoalToolExecutor {
     pub(crate) execution_allowed: bool,
+    pub(crate) goal_presence: Arc<GoalPresence>,
     kind: GoalToolKind,
     thread_id: ThreadId,
     state_db: Arc<codex_state::StateRuntime>,
@@ -86,6 +88,7 @@ impl GoalToolExecutor {
         Self {
             kind: GoalToolKind::Get,
             execution_allowed: true,
+            goal_presence: Arc::default(),
             thread_id,
             state_db,
             accounting_state,
@@ -108,6 +111,7 @@ impl GoalToolExecutor {
         Self {
             kind: GoalToolKind::Create,
             execution_allowed: true,
+            goal_presence: Arc::default(),
             thread_id,
             state_db,
             accounting_state,
@@ -129,6 +133,7 @@ impl GoalToolExecutor {
         Self {
             kind: GoalToolKind::Update,
             execution_allowed: true,
+            goal_presence: Arc::default(),
             thread_id,
             state_db,
             accounting_state,
@@ -140,6 +145,18 @@ impl GoalToolExecutor {
     }
 }
 
+impl GoalToolExecutor {
+    /// Tools that can only act on an existing goal are hidden once the thread is
+    /// known to have none, so the model is not invited to call them.
+    pub(crate) fn requires_existing_goal(&self) -> bool {
+        matches!(self.kind, GoalToolKind::Update)
+    }
+}
+
+/// Returned when `update_goal` runs on a thread without a goal. Worded so a model
+/// that called it speculatively stops retrying instead of looping on the error.
+pub(crate) const UPDATE_GOAL_WITHOUT_GOAL_MESSAGE: &str = "This thread has no goal, so there is nothing to update. Do not call update_goal again. Continue with the user's task, or call create_goal only if the user explicitly asked for a goal.";
+
 impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(match self.kind {
@@ -147,6 +164,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for GoalToolExecutor {
             GoalToolKind::Create => CREATE_GOAL_TOOL_NAME,
             GoalToolKind::Update => UPDATE_GOAL_TOOL_NAME,
         })
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        matches!(self.kind, GoalToolKind::Get)
     }
 
     fn spec(&self) -> ToolSpec {
@@ -194,6 +215,7 @@ impl GoalToolExecutor {
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to read goal: {err}"))
             })?;
+        self.goal_presence.set(goal.is_some());
         goal_response(goal, CompletionBudgetReport::Omit)
     }
 
@@ -226,6 +248,7 @@ impl GoalToolExecutor {
                         .to_string(),
                 )
             })?;
+        self.goal_presence.set(true);
         fill_empty_thread_preview_if_possible(self.state_db.as_ref(), self.thread_id, &goal).await;
         let turn_id = self
             .accounting_state
@@ -287,12 +310,11 @@ impl GoalToolExecutor {
             .await
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to update goal: {err}"))
-            })?
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "cannot update goal because this thread has no goal".to_string(),
-                )
             })?;
+        self.goal_presence.set(goal.is_some());
+        let goal = goal.ok_or_else(|| {
+            FunctionCallError::RespondToModel(UPDATE_GOAL_WITHOUT_GOAL_MESSAGE.to_string())
+        })?;
         self.metrics
             .record_terminal_if_status_changed(previous_status, &goal);
         self.analytics.status_changed(

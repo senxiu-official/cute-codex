@@ -34,6 +34,7 @@ fn pair() -> (Commit, Vec<RolloutItem>) {
     let items = vec![
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
             turn_id: "turn".into(),
+            turn_attribution: None,
             root_turn_id: None,
             trace_id: None,
             started_at: None,
@@ -187,7 +188,10 @@ fn fork_ledger_strip_keeps_model_items() {
     let model_item = items[2].clone();
     assert_eq!(strip_fork_ledger(&mut items), 2);
     assert_eq!(items.len(), 2);
-    assert!(matches!(items[0], RolloutItem::EventMsg(EventMsg::TurnStarted(_))));
+    assert!(matches!(
+        items[0],
+        RolloutItem::EventMsg(EventMsg::TurnStarted(_))
+    ));
     assert_eq!(
         serde_json::to_value(&items[1]).unwrap(),
         serde_json::to_value(&model_item).unwrap()

@@ -12,9 +12,9 @@ expression: value
   [x] project-name          Project name (omitted when unavailable)
   [x] git-branch            Current Git branch (omitted when unavailable)
   [x] thread-title          Current thread title, or thread identifier when unnamed
-  [ ] C+ Notification       Cutex notification priority (Alt+N to cycle)
-  [ ] C+ Working Directory  Working directory with configurable display aliases
-  [ ] C+ Agent Name         Agent name and assigned project badge
+  [x] daybreak              Whether Daybreak is enabled for this thread
+  [ ] model                 Current model name
+  [ ] model-with-reasoning  Current model name with reasoning level
 ↓
-  my-project · feature/mixed-preview · Mixed preview thread
+  my-project · feature/mixed-preview · Mixed preview thread · Daybreak on
   space toggle · ←/→ reorder · enter save · esc cancel

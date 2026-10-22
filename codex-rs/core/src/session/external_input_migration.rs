@@ -59,10 +59,7 @@ impl Session {
     /// Hold admission while a conversation fork snapshots this thread. Unlike migration, a fork
     /// leaves every ExternalInput obligation with this thread: the child is never bound to the
     /// owner and copies no ledger facts, so pending, claimed or held messages do not block it.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "fork excludes admission while it copies the source history"
-    )]
+    // Fork excludes admission while it copies the source history: the caller holds the guard.
     pub(crate) async fn external_input_fork_guard(
         &self,
     ) -> Result<Option<MutexGuard<'_, Option<Runtime>>>, CodexErr> {

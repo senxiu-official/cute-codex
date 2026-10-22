@@ -21,7 +21,8 @@ impl ChatWidget {
             self.open_claude_permissions_popup();
             return;
         }
-        if self.config.explicit_permission_profile_mode
+        if self.thread_id.is_some()
+            || self.config.explicit_permission_profile_mode
             || self.permission_profiles_menu_opened
             || self
                 .config
@@ -78,7 +79,6 @@ impl ChatWidget {
                     /*summary*/ None,
                     /*service_tier*/ None,
                     /*collaboration_mode*/ None,
-                    /*personality*/ None,
                 )));
             })],
             dismiss_on_select: true,
@@ -346,7 +346,6 @@ impl ChatWidget {
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
-                /*personality*/ None,
             )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateActivePermissionProfile(
@@ -575,7 +574,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             items,
             header: Box::new(header),
-            ..SelectionViewParams::picker()
+            ..SelectionViewParams::confirmation()
         });
     }
 }

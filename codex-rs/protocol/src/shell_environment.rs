@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 pub const CODEX_SESSION_ID_ENV_VAR: &str = "CODEX_SESSION_ID";
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+pub const CODEX_TOOL_CALL_ID_ENV_VAR: &str = "CODEX_TOOL_CALL_ID";
 pub const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR: &str = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
 pub const OPENAI_FEDERATION_RULE_ID_ENV_VAR: &str = "OPENAI_FEDERATION_RULE_ID";
 pub const OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR: &str = "OPENAI_IDENTITY_TOKEN_FILE";
@@ -14,15 +15,59 @@ pub const OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR: &str = "OPENAI_WORKLOAD_IDEN
 pub const NON_INHERITABLE_ENV_VARS: &[&str] = &[
     CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
     "NODE_REPL_AUTH_TOKEN",
+    "CODEX_GUARDIAN_DECISIONS_API_KEY",
     OPENAI_FEDERATION_RULE_ID_ENV_VAR,
     OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
     OPENAI_WORKLOAD_IDENTITY_CONTEXT_ENV_VAR,
 ];
 
+/// Cutex fork: variables registered at runtime, such as the active model provider's `env_key`,
+/// that model-reachable child processes must not inherit either.
+static RUNTIME_NON_INHERITABLE_ENV_VARS: std::sync::RwLock<Vec<String>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Cutex fork: marks `name` as non-inheritable for the rest of this process, like the names in
+/// [`NON_INHERITABLE_ENV_VARS`]. Empty names are ignored; registering twice is a no-op.
+pub fn register_non_inheritable_env_var(name: &str) {
+    let name = name.trim();
+    if name.is_empty() || is_non_inheritable_env_var(name) {
+        return;
+    }
+    RUNTIME_NON_INHERITABLE_ENV_VARS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(name.to_string());
+}
+
+fn runtime_non_inheritable_env_vars() -> Vec<String> {
+    RUNTIME_NON_INHERITABLE_ENV_VARS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 pub fn is_non_inheritable_env_var(name: &str) -> bool {
     NON_INHERITABLE_ENV_VARS
         .iter()
         .any(|restricted| restricted.eq_ignore_ascii_case(name))
+        || RUNTIME_NON_INHERITABLE_ENV_VARS
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|restricted| restricted.eq_ignore_ascii_case(name))
+}
+
+pub fn set_tool_call_id_env_var(env: &mut HashMap<String, String>, tool_call_id: Option<&str>) {
+    #[cfg(windows)]
+    env.retain(|name, _| !name.eq_ignore_ascii_case(CODEX_TOOL_CALL_ID_ENV_VAR));
+    #[cfg(not(windows))]
+    env.remove(CODEX_TOOL_CALL_ID_ENV_VAR);
+    if let Some(tool_call_id) = tool_call_id.filter(|tool_call_id| !tool_call_id.contains('\0')) {
+        env.insert(
+            CODEX_TOOL_CALL_ID_ENV_VAR.to_string(),
+            tool_call_id.to_string(),
+        );
+    }
 }
 
 /// Configures a child command to omit non-inheritable variables from the
@@ -37,6 +82,9 @@ pub fn scrub_non_inheritable_env_vars(command: &mut std::process::Command) {
         .collect::<Vec<_>>();
 
     for name in NON_INHERITABLE_ENV_VARS {
+        command.env_remove(name);
+    }
+    for name in runtime_non_inheritable_env_vars() {
         command.env_remove(name);
     }
     for name in std::env::vars_os()
@@ -320,3 +368,7 @@ mod non_windows_tests {
         assert_eq!(result, expected);
     }
 }
+
+#[cfg(test)]
+#[path = "shell_environment_fork_tests.rs"]
+mod fork_tests;

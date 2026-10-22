@@ -14,6 +14,7 @@ use tracing::instrument;
 use tracing::trace_span;
 
 use crate::function_tool::FunctionCallError;
+use crate::function_tool::OrCancelToolExt;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::call_trace;
@@ -24,6 +25,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
+use crate::tools::repeated_failures::RepeatedToolFailures;
+use crate::tools::repeated_failures::ToolCallKey;
+use crate::tools::repeated_failures::failed_output_text;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use codex_history::ResponseItemEnvelope;
@@ -79,6 +83,19 @@ impl ToolCallRuntime {
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseItemEnvelope, CodexErr>> {
+        // Checked when the call is accepted so a refused repeat never reaches dispatch.
+        let repeated_failures = self
+            .step_context
+            .turn
+            .extension_data
+            .get_or_init(RepeatedToolFailures::default);
+        let failure_key = ToolCallKey::new(&call.tool_name, &call.payload);
+        if let Some(refusal) = repeated_failures.refusal(&failure_key) {
+            let response = Self::failure_response(call, FunctionCallError::RespondToModel(refusal));
+            return Either::Left(std::future::ready(Ok(ResponseItemEnvelope::new(
+                response.into(),
+            ))));
+        }
         let error_call = call.clone();
         let source = call.direct_source();
         let recorder = self.session.services.executed_tool_calls.clone();
@@ -92,7 +109,7 @@ impl ToolCallRuntime {
             cancellation_token,
             Arc::clone(&call_state),
         );
-        async move {
+        Either::Right(async move {
             let result = future.await;
             let mut recorded_call =
                 recorded_call.filter(|(_, recording)| recording.strong_count() > 0);
@@ -117,8 +134,9 @@ impl ToolCallRuntime {
                     .delivered_assistant_message = Some(text.clone());
             }
             recorder.attach_direct_call_to_output(&mut response.item, recorded_call);
+            repeated_failures.record(failure_key, failed_output_text(&response.item));
             Ok(response)
-        }
+        })
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -138,7 +156,12 @@ impl ToolCallRuntime {
             .record_tool_call(&call, &source, &step_context);
         let router = &step_context.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
-        let tool_runtime = router.tool_runtime(&call.tool_name);
+        let tool_runtime = router
+            .registered_tool(&call.tool_name)
+            .map(|tool| Arc::clone(&tool.runtime));
+        let finishes_on_cancellation = tool_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.finishes_on_cancellation());
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&step_context.turn);
@@ -196,17 +219,22 @@ impl ToolCallRuntime {
         let mut dispatch_handle = AbortOnDropHandle::new(tokio::spawn(
             async move {
                 let _message_admission = message_admission?;
-                if let Some(tool_runtime) = tool_runtime
-                    && let Some(readiness) = tool_runtime.wait_until_ready(&session)
-                {
-                    readiness.await;
-                }
+                // Readiness and admission remain cancellable even when the handler must finish.
+                let guard = async {
+                    if let Some(tool_runtime) = tool_runtime
+                        && let Some(readiness) = tool_runtime.wait_until_ready(&session)
+                    {
+                        readiness.await;
+                    }
 
-                let guard = if supports_parallel {
-                    Either::Left(lock.read().await)
-                } else {
-                    Either::Right(lock.write().await)
-                };
+                    if supports_parallel {
+                        Either::Left(lock.read().await)
+                    } else {
+                        Either::Right(lock.write().await)
+                    }
+                }
+                .or_cancel_tool(&invocation_cancellation_token)
+                .await?;
                 // Admission through the parallel-execution gate marks the end
                 // of dispatch waiting and the start of handler execution.
                 if let Some(execution_started_at) = execution_started_at {
@@ -249,7 +277,11 @@ impl ToolCallRuntime {
             let mut result = tokio::select! {
                 res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
-                    if call_state.terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
+                    // Dynamic handlers observe the token and publish their terminal item themselves.
+                    if finishes_on_cancellation
+                        || call_state.terminal_outcome_reached.load(Ordering::Acquire)
+                        || dispatch_handle.is_finished()
+                    {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
@@ -266,12 +298,13 @@ impl ToolCallRuntime {
                                     &call.call_id,
                                     trace_source,
                                 );
+                                call_state.terminal_outcome_reached.store(true, Ordering::Release);
                                 notify_tool_aborted(
                                     abort_session.as_ref(),
                                     abort_turn.as_ref(),
                                     call.call_id.as_str(),
                                     &call.tool_name,
-                                    abort_source,
+                                    abort_source.clone(),
                                 )
                                 .await;
                                 Ok(response)
@@ -281,6 +314,25 @@ impl ToolCallRuntime {
                     }
                 },
             };
+            // Cancellation outside the handler can return before the registry reports an outcome.
+            if cancellation_token.is_cancelled()
+                && !call_state
+                    .terminal_outcome_reached
+                    .swap(true, Ordering::AcqRel)
+            {
+                notify_tool_aborted(
+                    abort_session.as_ref(),
+                    abort_turn.as_ref(),
+                    call.call_id.as_str(),
+                    &call.tool_name,
+                    abort_source,
+                )
+                .await;
+                result = Ok(Self::aborted_response(
+                    &call,
+                    started.elapsed().as_secs_f32().max(0.1),
+                ));
+            }
             // Use one completion measurement for logging and response formatting.
             // Measuring inside a handler would omit routing and output processing.
             if let Some(timing) = tool_call_timing_guard.as_mut()
@@ -477,9 +529,15 @@ mod tests {
 
     #[test]
     fn tool_call_timing_guard_ignores_code_mode_source() {
+        let buffer: &'static std::sync::Mutex<Vec<u8>> =
+            Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
         let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
             .with_max_level(tracing::Level::INFO)
+            .with_writer(MockWriter::new(buffer))
             .finish();
+        // Keep callsite interest independent of untraced parallel test threads.
+        let _untraced = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
         tracing::subscriber::with_default(subscriber, || {
             let call = ToolCall {
                 tool_name: codex_tools::ToolName::plain("test_tool"),
@@ -519,6 +577,15 @@ mod tests {
                 "nested code-mode calls should not create overlapping timing events"
             );
         });
+
+        let logs = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert_eq!(
+            logs.lines()
+                .filter(|line| line.contains("event.name=\"codex.tool_call\""))
+                .count(),
+            1,
+            "only direct tool calls should emit a timing event; logs:\n{logs}"
+        );
     }
 
     #[test]
@@ -553,16 +620,33 @@ mod tests {
         });
     }
 
+    #[test_case::test_case(false; "ordinary_handler")]
+    #[test_case::test_case(true; "dynamic_handler")]
     #[tokio::test]
-    async fn cancellation_before_dispatch_admission_logs_dispatch_only_timing() -> anyhow::Result<()>
-    {
+    async fn cancellation_before_dispatch_admission_logs_dispatch_only_timing(
+        dynamic: bool,
+    ) -> anyhow::Result<()> {
         let (session, turn_context) = crate::session::tests::make_session_and_context().await;
         let session = Arc::new(session);
         let turn_context = Arc::new(turn_context);
         let tool_name = codex_tools::ToolName::plain("test_tool");
-        let handler = Arc::new(ImmediateHandler {
-            tool_name: tool_name.clone(),
-        }) as Arc<dyn CoreToolRuntime>;
+        let handler: Arc<dyn CoreToolRuntime> = if dynamic {
+            Arc::new(
+                crate::tools::handlers::DynamicToolHandler::new(
+                    &codex_protocol::dynamic_tools::DynamicToolFunctionSpec {
+                        name: tool_name.name.clone(),
+                        description: "test".to_string(),
+                        input_schema: serde_json::json!({"type": "object"}),
+                        defer_loading: false,
+                    },
+                )
+                .expect("dynamic handler"),
+            )
+        } else {
+            Arc::new(ImmediateHandler {
+                tool_name: tool_name.clone(),
+            })
+        };
         let step_context = StepContext::for_test(Arc::clone(&turn_context));
         let router = Arc::new(ToolRouter::from_parts(
             ToolRegistry::from_tools([handler]),

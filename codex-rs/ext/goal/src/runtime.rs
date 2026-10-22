@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 
 use codex_core::StartIfIdleSubmission;
@@ -23,6 +24,42 @@ use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
+
+/// Last known answer to "does this thread have a persisted goal row?".
+///
+/// Tool specs are built synchronously for every sampling step, so the goal
+/// tools cannot query the state DB there. This cache is refreshed whenever the
+/// extension reads or writes the goal, and is only used to decide whether
+/// goal-mutation tools are offered to the model. `Unknown` keeps the legacy
+/// behavior of offering every goal tool.
+#[derive(Debug)]
+pub(crate) struct GoalPresence(AtomicU8);
+
+impl Default for GoalPresence {
+    fn default() -> Self {
+        Self(AtomicU8::new(GOAL_PRESENCE_UNKNOWN))
+    }
+}
+
+const GOAL_PRESENCE_UNKNOWN: u8 = 0;
+const GOAL_PRESENCE_ABSENT: u8 = 1;
+const GOAL_PRESENCE_PRESENT: u8 = 2;
+
+impl GoalPresence {
+    pub(crate) fn set(&self, present: bool) {
+        let value = if present {
+            GOAL_PRESENCE_PRESENT
+        } else {
+            GOAL_PRESENCE_ABSENT
+        };
+        self.0.store(value, Ordering::Relaxed);
+    }
+
+    /// Returns false only when the thread is known to have no goal.
+    pub(crate) fn may_have_goal(&self) -> bool {
+        self.0.load(Ordering::Relaxed) != GOAL_PRESENCE_ABSENT
+    }
+}
 
 #[derive(Clone)]
 pub struct GoalRuntimeHandle {
@@ -54,6 +91,7 @@ struct GoalRuntimeInner {
     accounting_state: Arc<GoalAccountingState>,
     root_accounting_state: Option<Arc<GoalAccountingState>>,
     enabled: AtomicBool,
+    goal_presence: Arc<GoalPresence>,
     tools_available_for_thread: bool,
     tools_visible_for_thread: bool,
     goal_state_lock: Semaphore,
@@ -108,6 +146,7 @@ impl GoalRuntimeHandle {
                 accounting_state,
                 root_accounting_state: config.root_accounting_state,
                 enabled: AtomicBool::new(config.enabled),
+                goal_presence: Arc::default(),
                 tools_available_for_thread: config.tools_available_for_thread,
                 tools_visible_for_thread: config.tools_visible_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
@@ -129,6 +168,10 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn tools_available(&self) -> bool {
         self.is_enabled() && self.inner.tools_available_for_thread
+    }
+
+    pub(crate) fn goal_presence(&self) -> Arc<GoalPresence> {
+        Arc::clone(&self.inner.goal_presence)
     }
 
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -286,6 +329,19 @@ impl GoalRuntimeHandle {
         // Hold this through accounting and the status update so external goal
         // mutations and idle continuation cannot interleave between them.
         let _goal_state_permit = self.goal_state_permit().await?;
+        let accounting = &self.inner.accounting_state;
+        let _turn_start_permit = if matches!(reason, ActiveGoalStopReason::EmptyResponse)
+            && accounting.interrupted_turn_id().as_deref() == Some(turn_id)
+        {
+            Some(
+                accounting
+                    .turn_start_permit()
+                    .await
+                    .map_err(|err| err.to_string())?,
+            )
+        } else {
+            None
+        };
         let Some(accounting_goal_id) = self
             .inner
             .accounting_state
@@ -309,9 +365,7 @@ impl GoalRuntimeHandle {
                 None,
             ),
             ActiveGoalStopReason::EmptyResponse => {
-                let Some(expected_goal_id) =
-                    self.inner.accounting_state.empty_response_goal(turn_id)
-                else {
+                let Some(expected_goal_id) = accounting.empty_response_goal(turn_id) else {
                     return Ok(());
                 };
                 if accounting_goal_id != expected_goal_id {
@@ -410,6 +464,7 @@ impl GoalRuntimeHandle {
             .get_thread_goal(self.thread_id())
             .await
             .map_err(|err| err.to_string())?;
+        self.inner.goal_presence.set(goal.is_some());
         match goal {
             Some(goal) if goal.status == codex_state::ThreadGoalStatus::Active => {
                 self.inner
@@ -485,7 +540,7 @@ impl GoalRuntimeHandle {
             )
             .await
         {
-            Ok(StartIfIdleSubmission::Started { turn_id }) => {
+            Ok(StartIfIdleSubmission::Started { turn_id, .. }) => {
                 // Turn-stop evaluation takes the same permit, so even a fast response
                 // cannot finish before this host-admitted continuation is identified.
                 self.inner.accounting_state.mark_goal_continuation(turn_id);
@@ -508,6 +563,7 @@ impl GoalRuntimeHandle {
             .inner
             .accounting_state
             .current_turn_id()
+            .or_else(|| self.inner.accounting_state.interrupted_turn_id())
             .is_some_and(|turn_id| {
                 self.inner
                     .accounting_state

@@ -152,3 +152,32 @@ fn selected_file_launch_is_once_and_never_falls_back_to_other_storage() {
         b"default sentinel"
     );
 }
+
+/// Cutex fork: an env-key provider without its env var takes the selected file's API key.
+#[test]
+fn selected_file_supplies_env_key_provider_api_key() {
+    let root = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let path = root.path().join("selected.json");
+    SelectedFile::open(path.clone())
+        .unwrap()
+        .save(&auth("dummy-file-key"))
+        .unwrap();
+    configure_auth_file(Some(path)).unwrap();
+    let provider = codex_model_provider_info::ModelProviderInfo {
+        env_key: Some("CUTEX_TEST_UNSET_PROVIDER_KEY_6a1f".to_string()),
+        requires_openai_auth: false,
+        ..codex_model_provider_info::ModelProviderInfo::create_openai_provider(None)
+    };
+    assert_eq!(
+        provider.api_key().unwrap().as_deref(),
+        Some("dummy-file-key")
+    );
+    let openai_auth = codex_model_provider_info::ModelProviderInfo {
+        requires_openai_auth: true,
+        ..provider
+    };
+    assert!(openai_auth.api_key().is_err());
+}

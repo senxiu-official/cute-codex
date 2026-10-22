@@ -31,7 +31,13 @@ use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
 
+mod auth_file_api_key;
+mod capabilities;
 mod gateway_oauth;
+pub use auth_file_api_key::AuthFileApiKeyReader;
+pub use auth_file_api_key::set_auth_file_api_key_reader;
+pub use capabilities::ModelProviderCapabilities;
+pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
 pub use gateway_oauth::GatewayOAuthDelivery;
 
@@ -161,6 +167,9 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
+    /// Optional API capability overrides for a custom Responses-compatible provider.
+    /// Unspecified capabilities retain their existing provider defaults.
+    pub capabilities: Option<ModelProviderCapabilities>,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, RedactedString>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -471,12 +480,21 @@ other non-default provider fields are not supported"
     /// If `env_key` is Some, returns the API key for this provider if present
     /// (and non-empty) in the environment. If `env_key` is required but
     /// cannot be found, returns an error.
+    ///
+    /// Cutex fork: a provider that does not use OpenAI auth falls back to the
+    /// `OPENAI_API_KEY` of the launch-selected `--auth-file` when its env var is
+    /// missing or empty.
     pub fn api_key(&self) -> CodexResult<Option<String>> {
         match &self.env_key {
             Some(env_key) => {
                 let api_key = std::env::var(env_key)
                     .ok()
                     .filter(|v| !v.trim().is_empty())
+                    .or_else(|| {
+                        (!self.requires_openai_auth)
+                            .then(auth_file_api_key::auth_file_api_key)
+                            .flatten()
+                    })
                     .ok_or_else(|| {
                         CodexErr::EnvVar(EnvVarError {
                             var: env_key.clone(),
@@ -554,6 +572,7 @@ other non-default provider fields are not supported"
             requires_openai_auth: true,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            capabilities: None,
             include_internal_metadata: true,
         }
     }
@@ -593,6 +612,7 @@ other non-default provider fields are not supported"
             requires_openai_auth: false,
             supports_websockets: false,
             supports_standalone_web_search: false,
+            capabilities: None,
             include_internal_metadata: false,
         }
     }
@@ -766,6 +786,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         requires_openai_auth: false,
         supports_websockets: false,
         supports_standalone_web_search: false,
+        capabilities: None,
         include_internal_metadata: false,
     }
 }

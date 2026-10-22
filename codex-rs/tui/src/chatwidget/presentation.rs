@@ -244,6 +244,10 @@ impl ChatWidget {
                                 started_at,
                                 completed_at,
                                 duration_ms,
+                                root_turn_id: turns
+                                    .iter()
+                                    .find(|turn| turn.id == turn_id)
+                                    .and_then(|turn| turn.root_turn_id.clone()),
                             },
                         },
                         Some(replay_kind),

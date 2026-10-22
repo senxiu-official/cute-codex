@@ -26,7 +26,9 @@ pub(super) async fn load(
             .ok_or_else(|| error("missing presentation source"))?;
         items = super::read_thread::load_presentation_history_items(&path).await?;
     } else {
-        let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+        let lineage = store
+            .resolve_rollout_lineage(params.thread_id, /*initial_path*/ None)
+            .await?;
         for segment in lineage.segments() {
             let mut reader = codex_rollout::open_rollout_line_reader(&segment.rollout_path)
                 .await
@@ -87,6 +89,7 @@ pub(super) async fn load(
     Ok(StoredThreadHistory {
         thread_id: params.thread_id,
         items,
+        revision: None,
     })
 }
 fn error(value: impl std::fmt::Display) -> ThreadStoreError {

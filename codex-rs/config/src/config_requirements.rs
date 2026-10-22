@@ -879,6 +879,10 @@ impl fmt::Display for WebSearchModeRequirement {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsRequirementsToml {
     pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxImplementationToml>>,
+    /// False blocks both explicit MXC configuration and automatic selection.
+    pub allow_mxc: Option<bool>,
+    /// Require MXC as the selected local Windows backend.
+    pub require_mxc: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -891,6 +895,8 @@ pub enum WindowsSandboxImplementationToml {
 impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
         self.allowed_sandbox_implementations.is_none()
+            && self.allow_mxc.is_none()
+            && self.require_mxc.is_none()
     }
 }
 
@@ -1924,11 +1930,17 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let windows_sandbox_mode = match windows {
+        let mxc_requirement_source = windows
+            .as_ref()
+            .filter(|windows| windows.value.allow_mxc == Some(false))
+            .map(|windows| windows.source.clone());
+        let mut windows_sandbox_mode = match windows {
             Some(Sourced {
                 value:
                     WindowsRequirementsToml {
                         allowed_sandbox_implementations: Some(implementations),
+                        allow_mxc: _,
+                        require_mxc: _,
                     },
                 source: requirement_source,
             }) => {
@@ -1974,6 +1986,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 value:
                     WindowsRequirementsToml {
                         allowed_sandbox_implementations: None,
+                        allow_mxc: _,
+                        require_mxc: _,
                     },
                 ..
             })
@@ -1982,6 +1996,18 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
+        if let Some(requirement_source) = mxc_requirement_source {
+            windows_sandbox_mode.add_validator(move |candidate| match candidate {
+                Some(WindowsSandboxModeToml::Mxc) => Err(ConstraintError::InvalidValue {
+                    field_name: "windows.sandbox",
+                    candidate: format!("{candidate:?}"),
+                    allowed: "windows.allow_mxc = false".to_string(),
+                    requirement_source: requirement_source.clone(),
+                }),
+                Some(WindowsSandboxModeToml::Elevated | WindowsSandboxModeToml::Unelevated)
+                | None => Ok(()),
+            })?;
+        }
         let exec_policy = match rules {
             Some(Sourced { value, source }) => {
                 let policy = value.to_requirements_policy().map_err(|err| {
@@ -2566,6 +2592,7 @@ mod tests {
         assert_eq!(
             requirements.browser_use,
             Some(BrowserUseRequirementsToml {
+                extension: None,
                 allow_webmcp: None,
                 allow_history_access: Some(false),
                 disable_auto_review: Some(true),
@@ -2799,6 +2826,7 @@ mod tests {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
         let browser_use = BrowserUseRequirementsToml {
+            extension: None,
             allow_webmcp: None,
             allow_history_access: Some(false),
             disable_auto_review: Some(true),
@@ -2836,6 +2864,8 @@ mod tests {
         };
         let windows = WindowsRequirementsToml {
             allowed_sandbox_implementations: Some(vec![WindowsSandboxImplementationToml::Elevated]),
+            allow_mxc: None,
+            require_mxc: Some(true),
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
@@ -3790,6 +3820,9 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn deserialize_allowed_windows_sandbox_implementations() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str("[windows]\nrequire_mxc = true")?;
+        assert!(!requirements.is_empty());
+
         let toml_str = r#"
             [windows]
             allowed_sandbox_implementations = ["elevated"]
@@ -3820,6 +3853,22 @@ allowed_approvals_reviewers = ["user"]
                 .is_ok()
         );
         assert!(requirements.windows_sandbox_mode.can_set(&None).is_err());
+
+        for allow_mxc in [true, false] {
+            let config = from_str(&format!("{toml_str}\nallow_mxc = {allow_mxc}"))?;
+            let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+            let constraint = &requirements.windows_sandbox_mode;
+            assert_eq!(
+                [
+                    Some(WindowsSandboxModeToml::Elevated),
+                    Some(WindowsSandboxModeToml::Unelevated),
+                    Some(WindowsSandboxModeToml::Mxc),
+                    None,
+                ]
+                .map(|mode| constraint.can_set(&mode).is_ok()),
+                [true, false, allow_mxc, false]
+            );
+        }
 
         Ok(())
     }

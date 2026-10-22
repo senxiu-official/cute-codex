@@ -67,8 +67,13 @@ fn provider_item_id_projection_preserves_recovered_external_identity() -> anyhow
             .commit
             .receipt
             .clone();
+        // Since 0.162 base instructions are a prefixed developer message; omit them here.
         let prompt = Prompt {
             input: vec![item.clone()],
+            base_instructions: codex_protocol::models::BaseInstructions {
+                text: String::new(),
+                provenance: None,
+            },
             ..Default::default()
         };
         let mut request = client.build_responses_request(
@@ -146,6 +151,8 @@ fn strict_responses_providers_project_unpaired_external_input_as_user_message() 
                     .to_string(),
             }],
             phase: None,
+            encrypted_content: None,
+            status: None,
             internal_chat_message_metadata_passthrough: None,
         }
     );
@@ -180,6 +187,7 @@ async fn provider_item_id_projection_reaches_serialized_http_input() -> anyhow::
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*concurrent_reasoning_summaries_enabled*/ false,
+        /*output_token_replay_enabled*/ false,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         codex_model_provider::WorkspaceRoutingContext::new(server.uri()),
@@ -193,6 +201,10 @@ async fn provider_item_id_projection_reaches_serialized_http_input() -> anyhow::
     ]);
     let prompt = Prompt {
         input: serde_json::from_value(input.clone())?,
+        base_instructions: codex_protocol::models::BaseInstructions {
+            text: String::new(),
+            provenance: None,
+        },
         ..Default::default()
     };
     let metadata = test_responses_metadata_for_client(

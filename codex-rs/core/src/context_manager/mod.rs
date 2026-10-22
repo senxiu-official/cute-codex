@@ -1,3 +1,4 @@
+mod generated_image_history;
 mod history;
 mod normalize;
 pub(crate) mod updates;

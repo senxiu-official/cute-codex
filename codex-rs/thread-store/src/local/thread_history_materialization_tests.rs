@@ -4,17 +4,25 @@ use std::path::Path;
 use std::time::Duration;
 
 use chrono::Utc;
+use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::CommandExecutionItem;
+use codex_protocol::items::CommandExecutionStatus;
+use codex_protocol::items::McpToolCallItem;
+use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
@@ -195,6 +203,7 @@ async fn split_homes_support_backfill_listing_and_paginated_history() {
 
     store
         .resume_thread(ResumeThreadParams {
+            history_revision: None,
             thread_id,
             rollout_path: Some(rollout_path),
             history: None,
@@ -305,7 +314,7 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
         .append_items(AppendThreadItemsParams {
             thread_id,
             items: vec![
-                turn_started("turn-1"),
+                turn_started_with_root("turn-1", "root-1"),
                 completed_item(
                     thread_id,
                     "turn-1",
@@ -361,6 +370,7 @@ async fn paginated_live_append_materializes_turn_items_and_state() {
             Option<i64>,
             Option<String>,
             Option<String>,
+            Option<String>,
         ),
     >(
         r#"
@@ -374,7 +384,8 @@ SELECT
     completed_at,
     duration_ms,
     first_user_item_id,
-    final_agent_item_id
+    final_agent_item_id,
+    root_turn_id
 FROM thread_turns
 WHERE thread_id = ? AND turn_id = ?
         "#,
@@ -397,6 +408,7 @@ WHERE thread_id = ? AND turn_id = ?
             Some(10_000),
             Some("user-1".to_string()),
             Some("agent-1".to_string()),
+            Some("root-1".to_string()),
         )
     );
 
@@ -431,6 +443,163 @@ WHERE thread_id = ?
     .await
     .expect("read projection state");
     assert_eq!(projection_state, (rollout_len, 5));
+}
+
+#[tokio::test]
+async fn paginated_command_history_caps_aggregated_output() {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    let output = format!("head\n{}\ntail", "x".repeat(128 * 1024));
+    let command = CommandExecutionItem {
+        sandbox_type: None,
+        model_context: None,
+        id: "exec-1".to_string(),
+        plugin_id: None,
+        script_path: None,
+        process_id: None,
+        command: vec!["echo".to_string(), "hello".to_string()],
+        cwd: home.path().abs().into(),
+        parsed_cmd: vec![ParsedCommand::Unknown {
+            cmd: "echo hello".to_string(),
+        }],
+        source: ExecCommandSource::Agent,
+        interaction_input: None,
+        status: CommandExecutionStatus::Completed,
+        aggregated_output: Some(output),
+        exit_code: Some(0),
+        duration: Some(Duration::from_millis(12)),
+    };
+
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("turn-1"),
+                completed_item(thread_id, "turn-1", TurnItem::CommandExecution(command)),
+                turn_completed("turn-1"),
+            ],
+        })
+        .await
+        .expect("append command history");
+
+    let pool = codex_state::open_thread_history_db(&codex_state::SqliteConfig::new_for_testing(
+        home.path().abs(),
+    ))
+    .await
+    .expect("open thread history db");
+    let item_json = sqlx::query_scalar::<_, String>(
+        "SELECT item_json FROM thread_items WHERE thread_id = ? AND item_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .bind("exec-1")
+    .fetch_one(&pool)
+    .await
+    .expect("read projected command");
+    let projected: ThreadItem =
+        serde_json::from_str(&item_json).expect("deserialize projected command");
+    let ThreadItem::CommandExecution {
+        aggregated_output: Some(output),
+        ..
+    } = projected
+    else {
+        panic!("expected projected command output");
+    };
+    assert_eq!(output.len(), 64 * 1024);
+    assert!(output.starts_with("head\n"));
+    assert!(output.ends_with("\ntail"));
+    assert!(output.contains("command output truncated for persistence"));
+}
+
+#[tokio::test]
+async fn paginated_mcp_history_caps_large_results() {
+    let home = TempDir::new().expect("temp dir");
+    let store = projection_store(home.path()).await;
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    let arguments = serde_json::json!({"query": "large result"});
+    let tool_call = McpToolCallItem {
+        id: "mcp-1".to_string(),
+        server: "test".to_string(),
+        tool: "large_result".to_string(),
+        arguments: arguments.clone(),
+        connector_id: None,
+        mcp_app_resource_uri: None,
+        mcp_app_ui: None,
+        link_id: None,
+        app_name: None,
+        action_name: None,
+        plugin_id: None,
+        read_only_hint: None,
+        status: McpToolCallStatus::Failed,
+        result: Some(CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": format!("head\n{}\ntail", "x".repeat(200_000)),
+            })],
+            structured_content: None,
+            is_error: Some(true),
+            meta: None,
+        }),
+        error: None,
+        duration: Some(Duration::from_millis(25)),
+    };
+
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("turn-1"),
+                completed_item(thread_id, "turn-1", TurnItem::McpToolCall(tool_call)),
+                turn_completed("turn-1"),
+            ],
+        })
+        .await
+        .expect("append MCP history");
+
+    let pool = codex_state::open_thread_history_db(&codex_state::SqliteConfig::new_for_testing(
+        home.path().abs(),
+    ))
+    .await
+    .expect("open thread history db");
+    let item_json = sqlx::query_scalar::<_, String>(
+        "SELECT item_json FROM thread_items WHERE thread_id = ? AND item_id = ?",
+    )
+    .bind(thread_id.to_string())
+    .bind("mcp-1")
+    .fetch_one(&pool)
+    .await
+    .expect("read projected MCP tool call");
+    let projected: ThreadItem =
+        serde_json::from_str(&item_json).expect("deserialize projected MCP tool call");
+    let ThreadItem::McpToolCall {
+        arguments: projected_arguments,
+        result: Some(result),
+        ..
+    } = projected
+    else {
+        panic!("expected projected MCP tool call");
+    };
+    assert_eq!(projected_arguments, arguments);
+    let preview = result.content[0]["text"]
+        .as_str()
+        .expect("persisted MCP result preview");
+    assert_eq!(
+        *result,
+        McpToolCallResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": preview,
+            })],
+            structured_content: None,
+            meta: None,
+        }
+    );
+    assert!(preview.len() < 65 * 1024);
+    assert!(preview.contains("head"));
+    assert!(preview.contains("chars truncated"));
+    assert!(preview.contains("tail"));
 }
 
 #[tokio::test]
@@ -1091,6 +1260,7 @@ async fn paginated_fork_reads_compressed_shared_lineage_without_materializing() 
     fs::rename(&source_compressed_path, &external_path).expect("move shared source outside home");
     store
         .resume_thread(ResumeThreadParams {
+            history_revision: None,
             thread_id: source_thread_id,
             rollout_path: Some(external_path),
             history: None,
@@ -1524,7 +1694,10 @@ async fn terminal_turn_does_not_change_after_later_records() {
     store
         .append_items(AppendThreadItemsParams {
             thread_id,
-            items: vec![turn_started("turn-1"), turn_completed("turn-1")],
+            items: vec![
+                turn_started_with_root("turn-1", "root-1"),
+                turn_completed("turn-1"),
+            ],
         })
         .await
         .expect("append terminal turn");
@@ -1532,7 +1705,7 @@ async fn terminal_turn_does_not_change_after_later_records() {
         .append_items(AppendThreadItemsParams {
             thread_id,
             items: vec![
-                turn_started("turn-1"),
+                turn_started_with_root("turn-1", "wrong-root"),
                 completed_item(
                     thread_id,
                     "turn-1",
@@ -1569,6 +1742,7 @@ async fn terminal_turn_does_not_change_after_later_records() {
             Option<i64>,
             String,
             Option<String>,
+            Option<String>,
         ),
     >(
         r#"
@@ -1578,7 +1752,8 @@ SELECT
     rollout_end_ordinal,
     rollout_end_byte_offset,
     status,
-    first_user_item_id
+    first_user_item_id,
+    root_turn_id
 FROM thread_turns
 WHERE thread_id = ? AND turn_id = ?
         "#,
@@ -1597,12 +1772,13 @@ WHERE thread_id = ? AND turn_id = ?
             Some(turn_end_byte_offset),
             "completed".to_string(),
             None,
+            Some("root-1".to_string()),
         )
     );
 }
 
 #[tokio::test]
-async fn summary_items_use_final_answers_and_ignore_commentary() {
+async fn summary_items_use_final_answers_and_ignore_nonterminal_messages() {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
     let thread_id = ThreadId::default();
@@ -1647,6 +1823,11 @@ async fn summary_items_use_final_answers_and_ignore_commentary() {
                     thread_id,
                     "turn-1",
                     agent_message("commentary-1", MessagePhase::Commentary),
+                ),
+                completed_item(
+                    thread_id,
+                    "turn-1",
+                    agent_message("partial-1", MessagePhase::PartialAnswer),
                 ),
                 completed_item(
                     thread_id,
@@ -1710,11 +1891,16 @@ WHERE thread_id = ? AND turn_id = ?
                     "turn-2",
                     agent_message("commentary-2", MessagePhase::Commentary),
                 ),
+                completed_item(
+                    thread_id,
+                    "turn-2",
+                    agent_message("partial-2", MessagePhase::PartialAnswer),
+                ),
                 turn_completed("turn-2"),
             ],
         })
         .await
-        .expect("append commentary-only turn");
+        .expect("append turn without a final answer");
 
     let summary = store
         .list_turns(ListTurnsParams {
@@ -2595,6 +2781,80 @@ async fn projection_store(codex_home: &Path) -> LocalThreadStore {
     LocalThreadStore::new(config, Some(state_db))
 }
 
+/// A generated image whose bytes were saved to `saved_path` reaches the rollout
+/// file by path only (the base64 `result` is several MB per image; one owner machine,
+/// 2026-10-22: 163 images, 1.5 GB). The live writer path is the one every
+/// session append takes.
+#[tokio::test]
+async fn saved_generated_images_reach_the_rollout_by_path_only() {
+    use codex_extension_items::ExtensionItem;
+    use codex_extension_items::image_generation::ImageGenerationItem;
+
+    let home = TempDir::new().expect("temp dir");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let thread_id = ThreadId::default();
+    create_paginated_thread(&store, thread_id).await;
+    let saved = home
+        .path()
+        .join("generated_images")
+        .join("call-1.png")
+        .abs();
+    let result = "QUJD".repeat(500_000);
+    let image = |saved_path| {
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::Extension(ExtensionItem::ImageGeneration(ImageGenerationItem {
+                id: "call-1".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("a cat".to_string()),
+                result: result.clone(),
+                transparent_background: None,
+                failure: None,
+                saved_path,
+                imagegen_request_id: None,
+                generation_id: None,
+            })),
+            started_at_ms: Some(1),
+            completed_at_ms: 2,
+        }))
+    };
+    store
+        .append_items(AppendThreadItemsParams {
+            thread_id,
+            items: vec![
+                turn_started("turn-1"),
+                image(Some(saved.clone())),
+                image(None),
+                turn_completed("turn-1"),
+            ],
+        })
+        .await
+        .expect("append paginated items");
+    store.flush_thread(thread_id).await.expect("flush");
+    let rollout_path = store
+        .live_rollout_path(thread_id)
+        .await
+        .expect("rollout path");
+    let text = fs::read_to_string(rollout_path.as_path()).expect("read rollout");
+    let image_lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.contains("image_gen.generation"))
+        .collect();
+    assert_eq!(image_lines.len(), 2);
+    assert!(
+        image_lines[0].len() < 2_000,
+        "saved image persisted by path: {} bytes",
+        image_lines[0].len()
+    );
+    assert!(image_lines[0].contains("call-1.png"));
+    assert!(
+        image_lines[1].contains(&result),
+        "an unsaved image keeps its only copy"
+    );
+    store.shutdown_thread(thread_id).await.expect("shutdown");
+}
+
 async fn create_paginated_thread(store: &LocalThreadStore, thread_id: ThreadId) {
     create_paginated_subagent_thread(
         store, thread_id, /*history_base*/ None, /*subagent_history_start_ordinal*/ None,
@@ -2655,6 +2915,7 @@ async fn create_paginated_subagent_thread(
 
 fn turn_started(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+        turn_attribution: None,
         turn_id: turn_id.to_string(),
         root_turn_id: None,
         trace_id: None,
@@ -2664,8 +2925,17 @@ fn turn_started(turn_id: &str) -> RolloutItem {
     }))
 }
 
+fn turn_started_with_root(turn_id: &str, root_turn_id: &str) -> RolloutItem {
+    let mut item = turn_started(turn_id);
+    if let RolloutItem::EventMsg(EventMsg::TurnStarted(event)) = &mut item {
+        event.root_turn_id = Some(root_turn_id.to_string());
+    }
+    item
+}
+
 fn turn_completed(turn_id: &str) -> RolloutItem {
     RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+        root_turn_id: None,
         turn_id: turn_id.to_string(),
         last_agent_message: None,
         error: None,
@@ -2679,6 +2949,8 @@ fn turn_completed(turn_id: &str) -> RolloutItem {
 fn user_message(message: &str) -> RolloutItem {
     RolloutItem::ResponseItem(
         ResponseItem::Message {
+            status: None,
+            encrypted_content: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -3123,8 +3395,12 @@ async fn partial_answer_phase_projects_and_is_not_the_final_answer() {
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
                 text: "partial".to_string(),
+                annotations: None,
+                logprobs: None,
             }],
             phase: Some(MessagePhase::PartialAnswer),
+            encrypted_content: None,
+            status: None,
             internal_chat_message_metadata_passthrough: None,
         }
         .into(),

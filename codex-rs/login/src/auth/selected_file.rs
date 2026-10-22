@@ -13,9 +13,27 @@ static SELECTION: OnceLock<Option<Arc<dyn AuthStorageBackend>>> = OnceLock::new(
 /// Passing no path preserves the default credential-store behavior.
 pub fn configure_auth_file(path: Option<PathBuf>) -> io::Result<()> {
     let storage = path.map(open_selected).transpose()?;
+    let explicit = storage.is_some();
     SELECTION
         .set(storage)
-        .map_err(|_| io::Error::other("auth-file selection is already fixed"))
+        .map_err(|_| io::Error::other("auth-file selection is already fixed"))?;
+    if explicit {
+        // Env-key providers may take their key from this file instead of the environment.
+        codex_model_provider_info::set_auth_file_api_key_reader(selected_file_api_key);
+    }
+    Ok(())
+}
+
+/// The selected file's `OPENAI_API_KEY`. Read on demand so a rewritten file is honored.
+fn selected_file_api_key() -> Option<String> {
+    let storage = selected()?;
+    match storage.load() {
+        Ok(auth) => auth.and_then(|auth| auth.openai_api_key),
+        Err(error) => {
+            tracing::warn!(%error, "failed to read the API key from the selected auth file");
+            None
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

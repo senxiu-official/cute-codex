@@ -77,13 +77,10 @@ pub(super) async fn prepare(
     drop(source_writer_guard);
     let model_context = Arc::new(model_context::load_for_fork(lineage, history_base).await?);
 
-    Ok(PreparedFork::new(
-        thread_id,
-        history_base,
-        model_context,
-        source_reservation,
+    Ok(
+        PreparedFork::new(thread_id, history_base, model_context, source_reservation)
+            .with_source_rollout_path(source_rollout_path),
     )
-    .with_source_rollout_path(source_rollout_path))
 }
 
 pub(super) async fn history_base_at_boundary(

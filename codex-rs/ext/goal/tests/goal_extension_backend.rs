@@ -31,6 +31,7 @@ use codex_goal_extension::GoalExtensionConfig;
 use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalRuntimeHandle;
 use codex_goal_extension::GoalService;
+use codex_goal_extension::GoalServiceError;
 use codex_goal_extension::GoalSetRequest;
 use codex_goal_extension::GoalTokenBudgetUpdate;
 use codex_goal_extension::install_with_backend;
@@ -234,6 +235,7 @@ async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()>
         )
     );
 
+    let tools = harness.tools();
     let update_tool = tool_by_name(&tools, "update_goal");
     update_tool
         .handle(tool_call(
@@ -582,6 +584,7 @@ async fn subagent_usage_resets_when_root_goal_is_replaced() -> anyhow::Result<()
         "call-complete-first-goal",
         json!({ "status": "complete" }),
     );
+    let tools = harness.tools();
     let completed = tool_by_name(&tools, "update_goal")
         .handle(completion.clone())
         .await?;
@@ -1132,6 +1135,7 @@ async fn update_goal_can_stop_and_accounts_final_progress() -> anyhow::Result<()
                 ),
             )
             .await;
+        let tools = harness.tools();
         let update_tool = tool_by_name(&tools, "update_goal");
         let invocation = tool_call(
             "update_goal",
@@ -1215,6 +1219,15 @@ async fn update_goal_rejects_resume_and_system_limit_statuses() -> anyhow::Resul
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    runtime
+        .thread_goals()
+        .insert_thread_goal(
+            thread_id,
+            "existing goal",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
     let tools = installed_tools(runtime, thread_id).await;
     let update_tool = tool_by_name(&tools, "update_goal");
     for status in ["active", "budgetLimited", "usageLimited"] {
@@ -1342,6 +1355,7 @@ async fn goal_service_external_set_active_preserves_concurrent_usage() -> anyhow
                 token_budget: GoalTokenBudgetUpdate::Keep,
                 max_goal_token_budget: None,
             },
+            std::future::ready(Ok(())),
         )
         .await?;
     harness
@@ -1416,7 +1430,7 @@ async fn thread_stop_unregisters_goal_runtime_from_service() -> anyhow::Result<(
     assert!(
         harness
             .goal_service
-            .clear_thread_goal(runtime.as_ref(), thread_id)
+            .clear_thread_goal(runtime.as_ref(), thread_id, std::future::ready(Ok(())))
             .await?
     );
     assert_eq!(Vec::<CapturedGoalEvent>::new(), harness.sink.goal_events());
@@ -1483,17 +1497,28 @@ async fn goal_service_sets_gets_and_clears_thread_goal() -> anyhow::Result<()> {
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
     let api = GoalService::new();
 
-    let set = api
+    let request = GoalSetRequest {
+        thread_id,
+        objective: GoalObjectiveUpdate::Set(" ship goal API ownership "),
+        status: None,
+        token_budget: GoalTokenBudgetUpdate::Set(Some(123)),
+        max_goal_token_budget: None,
+    };
+    let failure = GoalServiceError::Internal("instruction recording failed".to_owned());
+    let result = api
         .set_thread_goal(
             runtime.as_ref(),
-            GoalSetRequest {
-                thread_id,
-                objective: GoalObjectiveUpdate::Set(" ship goal API ownership "),
-                status: None,
-                token_budget: GoalTokenBudgetUpdate::Set(Some(123)),
-                max_goal_token_budget: None,
-            },
+            request,
+            std::future::ready(Err(failure.clone())),
         )
+        .await;
+    assert_eq!(result.unwrap_err(), failure);
+    assert_eq!(
+        api.get_thread_goal(runtime.as_ref(), thread_id).await?,
+        None
+    );
+    let set = api
+        .set_thread_goal(runtime.as_ref(), request, std::future::ready(Ok(())))
         .await?;
     let get = api
         .get_thread_goal(runtime.as_ref(), thread_id)
@@ -1510,12 +1535,32 @@ async fn goal_service_sets_gets_and_clears_thread_goal() -> anyhow::Result<()> {
     assert_eq!(Some(123), get.token_budget);
     assert_eq!(Some("ship goal API ownership"), metadata.preview.as_deref());
 
-    assert!(api.clear_thread_goal(runtime.as_ref(), thread_id).await?);
+    assert_eq!(
+        api.clear_thread_goal(
+            runtime.as_ref(),
+            thread_id,
+            std::future::ready(Err(failure.clone()))
+        )
+        .await,
+        Err(failure),
+    );
+    assert_eq!(
+        api.get_thread_goal(runtime.as_ref(), thread_id).await?,
+        Some(get)
+    );
+
+    assert!(
+        api.clear_thread_goal(runtime.as_ref(), thread_id, std::future::ready(Ok(())))
+            .await?
+    );
     assert_eq!(
         None,
         api.get_thread_goal(runtime.as_ref(), thread_id).await?
     );
-    assert!(!api.clear_thread_goal(runtime.as_ref(), thread_id).await?);
+    assert!(
+        !api.clear_thread_goal(runtime.as_ref(), thread_id, std::future::ready(Ok(())))
+            .await?
+    );
     Ok(())
 }
 
@@ -1537,6 +1582,7 @@ async fn goal_service_enforces_maximum_token_budget_on_creation_and_updates() ->
                 token_budget: GoalTokenBudgetUpdate::Keep,
                 max_goal_token_budget: Some(100),
             },
+            std::future::ready(Ok(())),
         )
         .await?;
     assert_eq!(goal.goal.token_budget, Some(100));
@@ -1551,6 +1597,7 @@ async fn goal_service_enforces_maximum_token_budget_on_creation_and_updates() ->
                 token_budget: GoalTokenBudgetUpdate::Set(Some(101)),
                 max_goal_token_budget: Some(100),
             },
+            std::future::ready(Ok(())),
         )
         .await
         .expect_err("goal budget above the configured maximum should fail");
@@ -1577,6 +1624,7 @@ async fn goal_service_enforces_maximum_token_budget_on_creation_and_updates() ->
                 token_budget: GoalTokenBudgetUpdate::Set(Some(99)),
                 max_goal_token_budget: Some(100),
             },
+            std::future::ready(Ok(())),
         )
         .await?;
     assert_eq!(goal.goal.token_budget, Some(99));
@@ -1591,9 +1639,102 @@ async fn goal_service_enforces_maximum_token_budget_on_creation_and_updates() ->
                 token_budget: GoalTokenBudgetUpdate::Set(None),
                 max_goal_token_budget: Some(100),
             },
+            std::future::ready(Ok(())),
         )
         .await?;
     assert_eq!(goal.goal.token_budget, Some(100));
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_goal_is_offered_only_while_the_thread_has_a_goal() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    assert_eq!(
+        vec!["get_goal".to_string(), "create_goal".to_string()],
+        tool_names(&harness.tools())
+    );
+
+    let tools = harness.tools();
+    tool_by_name(&tools, "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship it" }),
+        ))
+        .await?;
+    let tools = harness.tools();
+    assert_eq!(
+        vec![
+            "get_goal".to_string(),
+            "create_goal".to_string(),
+            "update_goal".to_string(),
+        ],
+        tool_names(&tools)
+    );
+
+    // A completed goal still exists, so the tool list does not change again.
+    tool_by_name(&tools, "update_goal")
+        .handle(tool_call(
+            "update_goal",
+            "call-complete-goal",
+            json!({ "status": "complete" }),
+        ))
+        .await?;
+    assert_eq!(3, harness.tools().len());
+
+    assert!(
+        harness
+            .goal_service
+            .clear_thread_goal(runtime.as_ref(), thread_id, std::future::ready(Ok(())))
+            .await?
+    );
+    assert_eq!(
+        vec!["get_goal".to_string(), "create_goal".to_string()],
+        tool_names(&harness.tools())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_goal_without_goal_tells_the_model_to_stop_calling_it() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    let tools = harness.tools();
+    tool_by_name(&tools, "create_goal")
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship it" }),
+        ))
+        .await?;
+    // A step built while the goal existed may still dispatch after it is cleared.
+    let tools = harness.tools();
+    harness
+        .goal_service
+        .clear_thread_goal(runtime.as_ref(), thread_id, std::future::ready(Ok(())))
+        .await?;
+
+    let Err(error) = tool_by_name(&tools, "update_goal")
+        .handle(tool_call(
+            "update_goal",
+            "call-update-goal",
+            json!({ "status": "complete" }),
+        ))
+        .await
+    else {
+        panic!("update_goal without a goal should fail");
+    };
+    assert_eq!(
+        FunctionCallError::RespondToModel(
+            "This thread has no goal, so there is nothing to update. Do not call update_goal again. Continue with the user's task, or call create_goal only if the user explicitly asked for a goal.".to_string()
+        ),
+        error
+    );
     Ok(())
 }
 

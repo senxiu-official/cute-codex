@@ -107,6 +107,7 @@ fn full_rebuild_buffers_original_turn_and_rejects_partial_pair() {
             codex_protocol::protocol::TurnStartedEvent {
                 turn_id: "original-turn".into(),
                 trace_id: None,
+                turn_attribution: None,
                 root_turn_id: None,
                 started_at: Some(1),
                 model_context_window: None,

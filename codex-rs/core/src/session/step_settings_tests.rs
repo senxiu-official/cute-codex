@@ -336,7 +336,11 @@ async fn model_variant_cannot_bypass_underlying_review_requirements() {
             models: vec![variant],
         },
     );
-    let settings = ResolvedStepSettings::new(selected, initial, /*fast_mode_enabled*/ false);
+    let settings = ResolvedStepSettings::new(
+        selected,
+        initial,
+        &codex_features::Features::with_defaults(),
+    );
     let update = StepSettingsUpdate {
         model: Some("Protected [285K]".to_string()),
         ..Default::default()
@@ -351,7 +355,7 @@ async fn model_variant_cannot_bypass_underlying_review_requirements() {
             &constraints,
             &manager,
             &ModelInfoOverrides::default(),
-            /*fast_mode_enabled*/ false,
+            &codex_features::Features::with_defaults(),
         )
         .await
         .unwrap();
@@ -377,7 +381,7 @@ async fn model_variant_cannot_bypass_underlying_review_requirements() {
                 &unsafe_constraints,
                 &manager,
                 &ModelInfoOverrides::default(),
-                /*fast_mode_enabled*/ false
+                &codex_features::Features::with_defaults(),
             )
             .await
             .err(),
@@ -501,7 +505,6 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
         .expect("test model should have instruction metadata");
     messages.instructions_template =
         Some("Catalog B.\n# Personality\nfixed\n# Rules\nKeep the rules.".to_string());
-    messages.instructions_variables = None;
     messages.auto_review = Some(auto_review);
     messages.guardian_v2 = Some(guardian_v2);
     let catalog = ModelsResponse {

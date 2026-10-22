@@ -120,3 +120,7 @@ WHERE version = ?
 #[cfg(test)]
 #[path = "migrations_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "migrations_fork_tests.rs"]
+mod fork_tests;

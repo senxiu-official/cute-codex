@@ -8,15 +8,15 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::CodexThread;
+use codex_core::context::CanonicalBytePolicy;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
-use codex_protocol::mcp::ClientMcpExtensions;
-use codex_core::context::CanonicalBytePolicy;
 use codex_protocol::external_input::Delivery;
 use codex_protocol::external_input::Envelope;
 use codex_protocol::external_input::Message;
 use codex_protocol::external_input::Source;
 use codex_protocol::external_input::SourceKind;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -88,6 +88,7 @@ async fn bound_paginated_thread(server: &MockServer) -> Result<Bound> {
                 conversation_id: context.thread_id,
                 history: Arc::new(context.items),
                 rollout_path: Some(rollout_path),
+                history_revision: None,
             }),
             codex_core::test_support::auth_manager_from_auth(codex_login::CodexAuth::from_api_key(
                 "dummy",

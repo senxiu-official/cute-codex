@@ -52,14 +52,18 @@ pub(super) fn estimate_request_tokens(request: &ResponsesApiRequest) -> usize {
         .iter()
         .map(estimate_item_token_count)
         .fold(0i64, i64::saturating_add);
-    let instructions = TruncationPolicy::Bytes(request.instructions.len()).token_budget();
     let metadata = serde_json::to_vec(&(&request.tools, &request.text))
         .map(|bytes| TruncationPolicy::Bytes(bytes.len()).token_budget())
         .unwrap_or(usize::MAX);
+    // Cutex fork: top-level instructions (provider `instructions_field`) count like input.
+    let instructions = request
+        .instructions
+        .as_ref()
+        .map_or(0, |text| TruncationPolicy::Bytes(text.len()).token_budget());
     usize::try_from(input)
         .unwrap_or(usize::MAX)
-        .saturating_add(instructions)
         .saturating_add(metadata)
+        .saturating_add(instructions)
 }
 
 /// Restores originals lost during this review, then checks the complete request.

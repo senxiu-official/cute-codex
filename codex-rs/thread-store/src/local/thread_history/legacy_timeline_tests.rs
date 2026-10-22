@@ -22,6 +22,7 @@ fn history(thread_id: ThreadId, names: &[&str]) -> String {
             TurnStartedEvent {
                 turn_id: (*name).into(),
                 trace_id: None,
+                turn_attribution: None,
                 root_turn_id: None,
                 started_at: Some(10),
                 model_context_window: None,
@@ -37,6 +38,7 @@ fn history(thread_id: ThreadId, names: &[&str]) -> String {
                 completed_at: Some(20),
                 duration_ms: Some(10_000),
                 time_to_first_token_ms: None,
+                root_turn_id: None,
             },
         )));
     }

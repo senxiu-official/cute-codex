@@ -5,7 +5,6 @@ use codex_protocol::ResponseItemId;
 use codex_protocol::items::AgentMessageContent;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
-use tracing::Subscriber as _;
 use tracing_subscriber::prelude::*;
 
 struct RewriteAgentMessageContributor;
@@ -30,9 +29,13 @@ impl TurnItemContributor for RewriteAgentMessageContributor {
 
 fn assistant_output_text(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::with_suffix("msg", "1")),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }],
         phase: None,
@@ -42,31 +45,23 @@ fn assistant_output_text(text: &str) -> ResponseItem {
 
 #[test]
 fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
-    struct TestCallsite;
-    static TEST_CALLSITE: TestCallsite = TestCallsite;
-    impl tracing::callsite::Callsite for TestCallsite {
-        fn set_interest(&self, _: tracing::subscriber::Interest) {}
-        fn metadata(&self) -> &tracing::Metadata<'static> {
-            &TEST_METADATA
-        }
-    }
-    static TEST_METADATA: tracing::Metadata<'static> = tracing::Metadata::new(
-        "post_sampling_token_estimate",
-        POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
-        tracing::Level::TRACE,
-        None,
-        None,
-        None,
-        tracing::field::FieldSet::new(&[], tracing::callsite::Identifier(&TEST_CALLSITE)),
-        tracing::metadata::Kind::EVENT,
-    );
-
     let feedback = codex_feedback::CodexFeedback::new();
     let subscriber = tracing_subscriber::registry()
         .with(feedback.logger_layer())
         .with(tracing_subscriber::fmt::layer().with_filter(codex_state::log_db::default_filter()));
 
-    assert!(subscriber.register_callsite(&TEST_METADATA).is_never());
+    static METADATA: tracing::Metadata<'static> = tracing::metadata! {
+        name: "post sampling token estimate filter probe",
+        target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
+        level: tracing::Level::TRACE,
+        fields: &["turn_id", "estimated_token_count", "message"],
+        callsite: &CALLSITE,
+        kind: tracing::metadata::Kind::EVENT.hint(),
+    };
+    static CALLSITE: tracing::callsite::DefaultCallsite =
+        tracing::callsite::DefaultCallsite::new(&METADATA);
+
+    assert!(tracing::Subscriber::register_callsite(&subscriber, &METADATA).is_never());
 }
 
 #[tokio::test]

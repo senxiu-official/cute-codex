@@ -16,6 +16,7 @@ pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
 pub(crate) mod parallel;
 pub(crate) mod registry;
+mod repeated_failures;
 pub(crate) mod router;
 pub(crate) mod runtimes;
 pub(crate) mod sandboxing;
@@ -41,6 +42,14 @@ pub(crate) use executed_tool_calls::ExecutedToolCalls;
 pub(crate) use multi_agent_tool::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 pub use router::ToolRouter;
 
+/// Returns the turn-stop explanation once a model keeps repeating a refused failing call.
+pub(crate) fn take_repeated_tool_failure_stop(turn_context: &TurnContext) -> Option<String> {
+    turn_context
+        .extension_data
+        .get::<repeated_failures::RepeatedToolFailures>()?
+        .take_stop_request()
+}
+
 /// Legacy boundaries such as hook payloads, telemetry tags, and Responses tool
 /// names still require a single flattened string. Keep comparisons and sorting
 /// on `ToolName` itself; use this only when crossing those boundaries.
@@ -57,18 +66,6 @@ pub(crate) fn flat_tool_name(tool_name: &ToolName) -> Cow<'_, str> {
             Cow::Owned(name)
         }
         None => Cow::Borrowed(tool_name.name.as_str()),
-    }
-}
-
-pub(crate) fn tool_user_shell_type(
-    user_shell: &crate::shell::Shell,
-) -> codex_tools::ToolUserShellType {
-    match user_shell.shell_type {
-        crate::shell::ShellType::Zsh => codex_tools::ToolUserShellType::Zsh,
-        crate::shell::ShellType::Bash => codex_tools::ToolUserShellType::Bash,
-        crate::shell::ShellType::PowerShell => codex_tools::ToolUserShellType::PowerShell,
-        crate::shell::ShellType::Sh => codex_tools::ToolUserShellType::Sh,
-        crate::shell::ShellType::Cmd => codex_tools::ToolUserShellType::Cmd,
     }
 }
 

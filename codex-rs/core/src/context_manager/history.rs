@@ -12,12 +12,17 @@
 #[path = "history_user_authorization.rs"]
 mod user_authorization;
 
+use super::generated_image_history;
+use super::generated_image_history::PutAwayImageKey;
+use crate::context::BaseInstructionsFragment;
+
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
 use crate::context::is_guardian_context_message;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
+use crate::context::world_state::WorldStateUpdate;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
@@ -68,6 +73,7 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::with_serialization_allowance;
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -122,6 +128,9 @@ pub(crate) struct ContextManager {
     /// World-state comparison checkpoint. After compaction this may contain only
     /// extension metadata, with model-visible context still awaiting reinjection.
     world_state_baseline: Option<WorldStateSnapshot>,
+    /// cute-codex: generated images sent to the model as a text placeholder naming their saved
+    /// file (`generated_image_history_*` config). Raw items keep the images.
+    put_away_images: Arc<HashSet<PutAwayImageKey>>,
 }
 
 struct SharedConversationHistory {
@@ -211,6 +220,7 @@ impl SharedConversationHistory {
         self.items
             .iter()
             .filter(|envelope| !is_guardian_context_message(&envelope.item))
+            .filter(|envelope| !codex_guardian_context::is_inherited_manual_approval(envelope))
             .map(|envelope| {
                 (
                     &envelope.item,
@@ -246,6 +256,7 @@ impl ContextManager {
             ),
             reference_context_item: None,
             world_state_baseline: None,
+            put_away_images: Arc::default(),
         }
     }
 
@@ -353,7 +364,9 @@ impl ContextManager {
                                     .iter()
                                     .filter_map(|content| match content {
                                         ContentItem::InputText { text }
-                                        | ContentItem::OutputText { text } => Some(text.as_str()),
+                                        | ContentItem::OutputText { text, .. } => {
+                                            Some(text.as_str())
+                                        }
                                         _ => None,
                                     })
                                     .collect::<Vec<_>>()
@@ -446,20 +459,37 @@ impl ContextManager {
     pub(crate) fn update_world_state(
         &mut self,
         world_state: &WorldState,
-    ) -> (Vec<Box<dyn ContextualUserFragment>>, Option<WorldStateItem>) {
-        let snapshot = world_state.snapshot();
-        let fragments =
+    ) -> (Vec<WorldStateUpdate>, Option<WorldStateItem>) {
+        let (snapshot, fragments) =
             world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
-        let rollout_item = self.world_state_baseline.as_ref().map_or_else(
+        let rollout_item = self.world_state_item(&snapshot);
+        self.world_state_baseline = Some(snapshot);
+        (fragments, rollout_item)
+    }
+
+    pub(crate) fn render_step_world_state(
+        &self,
+        world_state: &WorldState,
+    ) -> (
+        WorldStateSnapshot,
+        Vec<WorldStateUpdate>,
+        Option<WorldStateItem>,
+    ) {
+        let (snapshot, fragments) =
+            world_state.render_history_diff(self.world_state_baseline.as_ref(), self.raw_items());
+        let rollout_item = self.world_state_item(&snapshot);
+        (snapshot, fragments, rollout_item)
+    }
+
+    fn world_state_item(&self, snapshot: &WorldStateSnapshot) -> Option<WorldStateItem> {
+        self.world_state_baseline.as_ref().map_or_else(
             || Some(WorldStateItem::full(snapshot.clone().into_object())),
             |previous| {
                 snapshot
                     .merge_patch_from(previous)
                     .map(WorldStateItem::patch)
             },
-        );
-        self.world_state_baseline = Some(snapshot);
-        (fragments, rollout_item)
+        )
     }
 
     pub(crate) fn set_world_state_baseline(&mut self, snapshot: WorldStateSnapshot) {
@@ -590,8 +620,70 @@ impl ContextManager {
         mut self,
         input_modalities: &[InputModality],
     ) -> Vec<ResponseItemEnvelope> {
+        self.apply_put_away_image_placeholders();
         self.normalize_history(input_modalities);
         Arc::unwrap_or_clone(self.items)
+    }
+
+    /// cute-codex: once more than `max_inline` generated images with a saved file are still
+    /// inline, puts away every such image that is not among the newest `keep` images of the
+    /// history. Returns how many images were newly put away. Called once at turn start.
+    pub(crate) fn put_away_generated_images(&mut self, max_inline: usize, keep: usize) -> usize {
+        let mut put_away = HashSet::clone(&self.put_away_images);
+        let added = generated_image_history::put_away(
+            self.items.iter().map(|envelope| &envelope.item),
+            &mut put_away,
+            max_inline,
+            keep,
+        );
+        if added > 0 {
+            self.put_away_images = Arc::new(put_away);
+        }
+        added
+    }
+
+    fn apply_put_away_image_placeholders(&mut self) {
+        if self.put_away_images.is_empty() {
+            return;
+        }
+        let put_away = Arc::clone(&self.put_away_images);
+        let affected: Vec<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, envelope)| {
+                !generated_image_history::put_away_parts(&envelope.item, &put_away).is_empty()
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if affected.is_empty() {
+            return;
+        }
+        let items = Arc::make_mut(&mut self.items);
+        for index in affected {
+            generated_image_history::apply_placeholders(&mut items[index].item, &put_away);
+        }
+    }
+
+    /// Token estimate for one item as sent to the model, with put-away images as placeholders.
+    fn estimate_prompt_item_token_count(&self, item: &ResponseItem) -> i64 {
+        if self.put_away_images.is_empty() {
+            return estimate_item_token_count(item);
+        }
+        let parts = generated_image_history::put_away_parts(item, &self.put_away_images);
+        if parts.is_empty() {
+            return estimate_item_token_count(item);
+        }
+        let mut bytes = estimate_response_item_model_visible_bytes(item);
+        for (_, path, part) in parts {
+            if let FunctionCallOutputContentItem::InputImage { image, detail } = part {
+                bytes = bytes.saturating_sub(estimate_image_reference_bytes(image, *detail));
+            }
+            bytes = bytes.saturating_add(text_bytes(
+                &generated_image_history::put_away_image_placeholder(path),
+            ));
+        }
+        approx_tokens_from_byte_count_i64(bytes)
     }
 
     /// Iterates over raw response items without exposing their history envelopes.
@@ -599,6 +691,11 @@ impl ContextManager {
         &self,
     ) -> impl Clone + ExactSizeIterator<Item = &ResponseItem> + DoubleEndedIterator {
         self.items.iter().map(|envelope| &envelope.item)
+    }
+
+    pub(crate) fn has_tool_declarations(&self) -> bool {
+        self.raw_items()
+            .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
     }
 
     /// Returns annotated history items without cloning their response payloads.
@@ -635,13 +732,19 @@ impl ContextManager {
         &self,
         base_instructions: &BaseInstructions,
     ) -> Option<i64> {
-        let base_tokens =
-            i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX);
+        // Incremental windows already account for their recorded base instructions below.
+        let has_recorded_instructions =
+            self.raw_items().any(BaseInstructionsFragment::matches_item);
+        let base_tokens = if has_recorded_instructions {
+            0
+        } else {
+            i64::try_from(approx_token_count(&base_instructions.text)).unwrap_or(i64::MAX)
+        };
 
         let items_tokens = self
             .items
             .iter()
-            .map(|envelope| estimate_item_token_count(&envelope.item))
+            .map(|envelope| self.estimate_prompt_item_token_count(&envelope.item))
             .fold(0i64, i64::saturating_add);
 
         Some(base_tokens.saturating_add(items_tokens))
@@ -1069,7 +1172,7 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
         ResponseItem::Message { content, .. } => content
             .iter()
             .map(|part| match part {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                     text_bytes(text)
                 }
                 ContentItem::InputImage { image, detail } => {
@@ -1099,15 +1202,18 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
         ResponseItem::Reasoning {
             encrypted_content: Some(content),
             ..
-        }
-        | ResponseItem::Compaction {
+        } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
+        ResponseItem::Compaction {
             encrypted_content: content,
             ..
         }
         | ResponseItem::ContextCompaction {
             encrypted_content: Some(content),
             ..
-        } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
+        } => i64::try_from(
+            codex_protocol::protocol::estimate_compaction_content_length(content.len()),
+        )
+        .unwrap_or(i64::MAX),
         ResponseItem::FunctionCall {
             name,
             namespace,

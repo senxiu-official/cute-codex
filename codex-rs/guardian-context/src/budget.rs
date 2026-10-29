@@ -5,6 +5,7 @@
 use std::io::Write;
 
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
@@ -30,6 +31,33 @@ pub const REQUEST_TOKENS_BOUNDARIES: &[f64] = &[
     1_000_000.0,
     2_000_000.0,
 ];
+
+/// Returns a bounded, sortable label with 20k steps and a final 256k cutoff.
+/// Upper bounds are inclusive; zero belongs to the first bucket and values above 256k to the last.
+pub fn request_token_bucket(tokens: usize) -> &'static str {
+    const BOUNDARIES: [usize; 13] = [
+        20_000, 40_000, 60_000, 80_000, 100_000, 120_000, 140_000, 160_000, 180_000, 200_000,
+        220_000, 240_000, 256_000,
+    ];
+    const LABELS: [&str; 14] = [
+        "01_0-20k",
+        "02_20k-40k",
+        "03_40k-60k",
+        "04_60k-80k",
+        "05_80k-100k",
+        "06_100k-120k",
+        "07_120k-140k",
+        "08_140k-160k",
+        "09_160k-180k",
+        "10_180k-200k",
+        "11_200k-220k",
+        "12_220k-240k",
+        "13_240k-256k",
+        "14_256k-max",
+    ];
+    LABELS[BOUNDARIES.partition_point(|bound| tokens > *bound)]
+}
+
 /// One shared scale for the section metric's count, token and byte measurements.
 /// Buckets belong to the metric name, not its measurement tag.
 pub const SECTION_COST_BOUNDARIES: &[f64] = &[
@@ -107,6 +135,15 @@ impl SectionCost {
                 self.image_count = self.image_count.saturating_add(1);
             }
             ContentItem::InputImage {
+                image: image @ ImageReference::Saved { .. },
+                ..
+            } => {
+                self.image_bytes = self
+                    .image_bytes
+                    .saturating_add(image_reference_bytes(image));
+                self.image_count = self.image_count.saturating_add(1);
+            }
+            ContentItem::InputImage {
                 image: ImageReference::File { .. },
                 ..
             } => {
@@ -165,7 +202,7 @@ impl ComposedContext {
                         .iter()
                         .fold(SectionCost::default(), SectionCost::add_content),
                     item => SectionCost {
-                        text_bytes: ByteCount::item(item),
+                        text_bytes: inline_equivalent_tool_bytes(item, ByteCount::item(item)),
                         ..SectionCost::default()
                     },
                 },
@@ -210,11 +247,28 @@ pub fn estimate_input_tokens_from_serialized_len(
             codex_protocol::protocol::estimate_compaction_content_length(encrypted_content.len());
         return framing.saturating_add(TruncationPolicy::Bytes(content).token_budget());
     }
+    let serialized_len = inline_equivalent_tool_bytes(item, serialized_len);
     let content = match item {
         ResponseItem::Message { content, .. } => content.as_slice(),
         _ => &[],
     };
     adjusted_tokens(serialized_len, content)
+}
+
+fn inline_equivalent_tool_bytes(item: &ResponseItem, mut serialized_len: usize) -> usize {
+    // Tool-output images retain the existing Inline wire-length estimate.
+    // Saved metadata must not make their reconstructed payload look smaller.
+
+    if let ResponseItem::FunctionCallOutput { output, .. }
+    | ResponseItem::CustomToolCallOutput { output, .. } = item
+    {
+        for part in output.content_items().into_iter().flatten() {
+            if let FunctionCallOutputContentItem::InputImage { image, .. } = part {
+                serialized_len = adjust_saved_reference_bytes(serialized_len, image, true);
+            }
+        }
+    }
+    serialized_len
 }
 
 fn compaction_ciphertext(item: &ResponseItem) -> Option<&str> {
@@ -274,9 +328,58 @@ pub(super) fn content_framing_tokens(item_count: usize) -> usize {
         .saturating_add(TruncationPolicy::Bytes(item_count - 1).token_budget())
 }
 
+/// Reconstructed URL bytes, computed without opening a referenced image.
+pub fn image_reference_bytes(image: &ImageReference) -> usize {
+    match image {
+        ImageReference::Inline { image_url } => image_url.len(),
+        ImageReference::File { file_id } => file_id.len(),
+        ImageReference::Saved { saved_image } => {
+            let raw = usize::try_from(saved_image.byte_size).unwrap_or(usize::MAX);
+            5usize
+                .saturating_add(saved_image.mime_type.len())
+                .saturating_add(8)
+                .saturating_add(raw.saturating_add(2).saturating_div(3).saturating_mul(4))
+        }
+    }
+}
+
+fn adjust_saved_reference_bytes(bytes: usize, image: &ImageReference, payload: bool) -> usize {
+    let ImageReference::Saved { saved_image } = image else {
+        return bytes;
+    };
+    let stored = ByteCount::measure(|counter| serde_json::to_writer(counter, image));
+    let inline = ByteCount::measure(|counter| {
+        serde_json::to_writer(
+            counter,
+            &ImageReference::Inline {
+                image_url: String::new(),
+            },
+        )
+    });
+    if stored == usize::MAX || inline == usize::MAX {
+        return usize::MAX;
+    }
+    let mut bytes = bytes.saturating_sub(stored).saturating_add(inline);
+    if payload {
+        let mime_json =
+            ByteCount::measure(|counter| serde_json::to_writer(counter, &saved_image.mime_type));
+        if mime_json == usize::MAX {
+            return usize::MAX;
+        }
+        let escaped = mime_json
+            .saturating_sub(2)
+            .saturating_sub(saved_image.mime_type.len());
+        bytes = bytes
+            .saturating_add(image_reference_bytes(image))
+            .saturating_add(escaped);
+    }
+    bytes
+}
+
 fn adjusted_tokens(mut bytes: usize, content: &[ContentItem]) -> usize {
     for item in content {
         if let ContentItem::InputImage { image, .. } = item {
+            bytes = adjust_saved_reference_bytes(bytes, image, false);
             if let ImageReference::Inline { image_url } = image {
                 let payload =
                     ByteCount::measure(|counter| serde_json::to_writer(counter, image_url));

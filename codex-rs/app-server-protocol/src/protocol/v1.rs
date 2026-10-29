@@ -72,6 +72,10 @@ pub struct InitializeCapabilities {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
+    /// Every opened public text item receives a full terminal snapshot, including
+    /// cancellation, upstream failure and early EOF, retained in thread history.
+    #[serde(default)]
+    pub full_text_item_terminal: bool,
     /// Private launch-bound common ExternalInput control API version, when enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

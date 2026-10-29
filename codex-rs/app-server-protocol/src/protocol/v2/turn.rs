@@ -198,6 +198,7 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub tool_output: Option<Box<TurnToolOutput>>,
     /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    /// Replaces unprotected client-provided entries when supplied; an empty map clears them.
     ///
     /// Entries are flattened into the JSON string sent as
     /// `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
@@ -207,6 +208,11 @@ pub struct TurnStartParams {
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Merge entries into the ResponsesAPI turn metadata without removing existing entries.
+    /// Applied after `responsesapiClientMetadata` if both are provided; reserved keys remain protected.
+    #[experimental("turn/start.responsesapiClientMetadataPatch")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata_patch: Option<HashMap<String, String>>,
     /// Optional client-provided context fragments keyed by an opaque source identifier.
     #[experimental("turn/start.additionalContext")]
     #[ts(optional = nullable)]
@@ -314,6 +320,7 @@ pub struct TurnSteerParams {
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
     /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+    /// Replaces unprotected client-provided entries when supplied; an empty map clears them.
     ///
     /// Entries are flattened into the JSON string sent as
     /// `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
@@ -323,6 +330,11 @@ pub struct TurnSteerParams {
     #[experimental("turn/steer.responsesapiClientMetadata")]
     #[ts(optional = nullable)]
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Merge entries into the ResponsesAPI turn metadata without removing existing entries.
+    /// Applied after `responsesapiClientMetadata` if both are provided; reserved keys remain protected.
+    #[experimental("turn/steer.responsesapiClientMetadataPatch")]
+    #[ts(optional = nullable)]
+    pub responsesapi_client_metadata_patch: Option<HashMap<String, String>>,
     /// Optional client-provided context fragments keyed by an opaque source identifier.
     #[experimental("turn/steer.additionalContext")]
     #[ts(optional = nullable)]
@@ -512,12 +524,22 @@ impl From<CoreUserInput> for UserInput {
                 text,
                 text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
+            CoreUserInput::Image {
+                image: CoreImageReference::Saved { saved_image },
+                detail,
+            } => UserInput::LocalImage {
+                path: PathBuf::from(saved_image.saved_path),
+                detail,
+            },
             CoreUserInput::Image { image, detail } => UserInput::Image {
                 image: match image {
                     CoreImageReference::Inline { image_url } => {
                         ImageReference::Inline { url: image_url }
                     }
                     CoreImageReference::File { file_id } => ImageReference::File { file_id },
+                    CoreImageReference::Saved { .. } => {
+                        unreachable!("saved images project as local images")
+                    }
                 },
                 detail,
             },

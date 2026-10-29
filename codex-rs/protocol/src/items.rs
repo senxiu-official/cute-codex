@@ -5,9 +5,11 @@ use crate::dynamic_tools::DynamicToolCallOutputContentItem;
 use crate::mcp::CallToolResult;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
+use crate::models::ContentItemMetadata;
 use crate::models::FunctionCallOutputBody;
 use crate::models::ImageDetail;
 use crate::models::ImageReference;
+use crate::models::InternalChatMessageMetadataPassthrough;
 use crate::models::MessagePhase;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -111,6 +113,11 @@ pub struct HookPromptItem {
 pub struct HookPromptFragment {
     pub text: String,
     pub hook_run_id: String,
+    /// Emission-time attribution; persisted on the ResponseItem, not the UI hook fragment.
+    #[serde(skip)]
+    #[ts(skip)]
+    #[schemars(skip)]
+    pub metadata: ContentItemMetadata,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -610,6 +617,10 @@ impl UserMessageItem {
             .iter()
             .filter_map(|c| match c {
                 UserInput::LocalImage { path, .. } => Some(path.clone()),
+                UserInput::Image {
+                    image: ImageReference::Saved { saved_image },
+                    ..
+                } => Some(std::path::PathBuf::from(&saved_image.saved_path)),
                 _ => None,
             })
             .collect()
@@ -621,6 +632,10 @@ impl UserMessageItem {
                 .iter()
                 .filter_map(|c| match c {
                     UserInput::LocalImage { detail, .. } => Some(*detail),
+                    UserInput::Image {
+                        image: ImageReference::Saved { .. },
+                        detail,
+                    } => Some(*detail),
                     _ => None,
                 })
                 .collect(),
@@ -671,19 +686,20 @@ impl HookPromptFragment {
         Self {
             text: text.into(),
             hook_run_id: hook_run_id.into(),
+            metadata: ContentItemMetadata::default(),
         }
     }
 }
 
 pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<ResponseItem> {
-    let content = fragments
-        .iter()
-        .filter(|fragment| !fragment.hook_run_id.trim().is_empty())
-        .filter_map(|fragment| {
-            serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_id)
-                .map(|text| ContentItem::InputText { text })
-        })
-        .collect::<Vec<_>>();
+    let mut content = Vec::new();
+    let mut metadata = Vec::new();
+    for fragment in fragments {
+        if let Some(text) = serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_id) {
+            content.push(ContentItem::InputText { text });
+            metadata.push(fragment.metadata.clone());
+        }
+    }
 
     if content.is_empty() {
         return None;
@@ -696,7 +712,13 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
         role: "user".to_string(),
         content,
         phase: None,
-        internal_chat_message_metadata_passthrough: None,
+        internal_chat_message_metadata_passthrough: metadata
+            .iter()
+            .any(|part| part != &ContentItemMetadata::default())
+            .then_some(InternalChatMessageMetadataPassthrough {
+                content_item_metadata: Some(metadata),
+                ..Default::default()
+            }),
     })
 }
 
@@ -728,7 +750,7 @@ pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
         return None;
     }
 
-    Some(HookPromptFragment { text, hook_run_id })
+    Some(HookPromptFragment::from_single_hook(text, hook_run_id))
 }
 
 fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<String> {
@@ -868,6 +890,7 @@ mod tests {
             HookPromptFragment {
                 text: "Retry with tests.".to_string(),
                 hook_run_id: "hook-run-1".to_string(),
+                metadata: Default::default(),
             }
         );
     }

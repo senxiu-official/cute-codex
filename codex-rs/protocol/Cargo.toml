@@ -13,6 +13,9 @@ doctest = false
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
+image = { workspace = true }
+tempfile = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-async-utils = { workspace = true }
@@ -57,10 +60,12 @@ wildmatch = { workspace = true }
 landlock = { workspace = true }
 seccompiler = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [package.metadata.cargo-shear]

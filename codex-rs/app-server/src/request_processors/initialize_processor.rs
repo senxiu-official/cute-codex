@@ -218,6 +218,7 @@ impl InitializeRequestProcessor {
 
         let user_agent = get_codex_user_agent();
         let response = InitializeResponse {
+            full_text_item_terminal: true,
             external_input_version: self.external_input_version,
             external_input_versions: self.external_input_version.map(|_| vec![1, 2]),
             presentation_version: self.external_input_version,

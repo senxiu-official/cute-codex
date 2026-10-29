@@ -231,6 +231,7 @@ pub(crate) struct HandleOutputCtx {
     pub step_context: Arc<StepContext>,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
+    pub defer_tool_dispatch: bool,
     pub cancellation_token: CancellationToken,
 }
 
@@ -347,11 +348,22 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
+            let runtime = ctx.tool_runtime.clone();
+            // handle_tool_call dispatches immediately, not when its future is polled.
+            // Defer for post-model hooks or to cancel buffered calls during mailbox drains.
+            let tool_future: InFlightFuture<'static> = if ctx.defer_tool_dispatch {
+                Box::pin(async move {
+                    if cancellation_token.is_cancelled() {
+                        // The call is already in history; resume needs its output even if we never dispatch.
+                        let output =
+                            ToolCallRuntime::aborted_response(&call, /*elapsed_secs*/ None);
+                        return Ok(output.into_response());
+                    }
+                    runtime.handle_tool_call(call, cancellation_token).await
+                })
+            } else {
+                Box::pin(runtime.handle_tool_call(call, cancellation_token))
+            };
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
@@ -362,7 +374,7 @@ pub(crate) async fn handle_output_item_done(
                 .services
                 .executed_tool_calls
                 .observe_non_dispatched_call(&item);
-            let finalized_turn_item = finalize_non_tool_response_item(
+            let mut finalized_turn_item = finalize_non_tool_response_item(
                 ctx.sess.as_ref(),
                 TurnItemContributorPolicy::Run(ctx.turn_store.as_ref()),
                 &item,
@@ -372,6 +384,34 @@ pub(crate) async fn handle_output_item_done(
             let finalized_facts = finalized_turn_item
                 .as_ref()
                 .map(|finalized| finalized.facts.clone());
+            let is_text = finalized_turn_item.as_ref().is_some_and(|finalized| {
+                matches!(
+                    finalized.turn_item,
+                    TurnItem::AgentMessage(_) | TurnItem::Reasoning(_)
+                )
+            });
+            let commit = if is_text {
+                Some(ctx.step_context.turn.text_terminal_commit.lock().await)
+            } else {
+                None
+            };
+            if let Some(finalized) = &mut finalized_turn_item {
+                ctx.step_context
+                    .turn
+                    .open_text_items
+                    .lock()
+                    .await
+                    .stage_completed(&item, &mut finalized.turn_item);
+            }
+            record_completed_response_item_with_finalized_facts(
+                ctx.sess.as_ref(),
+                ctx.step_context.as_ref(),
+                &item,
+                finalized_facts.as_ref(),
+            )
+            .await;
+
+            let mut mirror = None;
             if let Some(finalized_turn_item) = finalized_turn_item {
                 if previously_active_item.is_none() {
                     ctx.sess
@@ -382,18 +422,31 @@ pub(crate) async fn handle_output_item_done(
                         .await;
                 }
 
-                ctx.sess
-                    .emit_turn_item_completed(&ctx.step_context.turn, finalized_turn_item.turn_item)
-                    .await;
+                if is_text {
+                    mirror = Some(
+                        ctx.sess
+                            .emit_turn_item_completed_in_commit(
+                                &ctx.step_context.turn,
+                                finalized_turn_item.turn_item,
+                            )
+                            .await,
+                    );
+                } else {
+                    ctx.sess
+                        .emit_turn_item_completed(
+                            &ctx.step_context.turn,
+                            finalized_turn_item.turn_item,
+                        )
+                        .await;
+                }
             }
-            record_completed_response_item_with_finalized_facts(
-                ctx.sess.as_ref(),
-                ctx.step_context.as_ref(),
-                &item,
-                finalized_facts.as_ref(),
-            )
-            .await;
-
+            if is_text && let Err(error) = ctx.sess.flush_rollout().await {
+                tracing::warn!(%error, "failed to flush canonical text commit");
+            }
+            drop(commit);
+            if let Some(event) = mirror {
+                ctx.sess.mirror_committed_event(&event).await;
+            }
             output.last_agent_message = finalized_facts.and_then(|facts| facts.last_agent_message);
         }
         // The tool request should be answered directly (or was denied); push that response into the transcript.

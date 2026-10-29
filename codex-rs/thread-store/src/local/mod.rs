@@ -157,6 +157,8 @@ pub struct LocalThreadStore {
     legacy_timeline: Arc<Mutex<Option<thread_history::CachedTimeline>>>,
     presentation_validation: Arc<Mutex<Option<presentation_history::ValidationStamp>>>,
     thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
+    #[cfg(test)]
+    startup_migration_retry_gate: Option<Arc<StartupMigrationRetryGate>>,
 }
 
 type ThreadDataCleanup = dyn Fn(Vec<ThreadId>) -> ThreadStoreFuture<'static, ()> + Send + Sync;
@@ -231,6 +233,14 @@ impl LiveWriterLocks {
     }
 }
 
+// Per-store synchronization for exercising startup contention through the public entry point.
+#[cfg(test)]
+#[derive(Default)]
+struct StartupMigrationRetryGate {
+    retry_started: tokio::sync::Notify,
+    retry_allowed: tokio::sync::Notify,
+}
+
 /// Process-scoped configuration for local thread storage.
 ///
 /// This describes where local storage lives. New-thread rollout metadata such
@@ -277,6 +287,8 @@ impl LocalThreadStore {
             legacy_timeline: Arc::new(Mutex::new(None)),
             presentation_validation: Arc::new(Mutex::new(None)),
             thread_data_cleanup: None,
+            #[cfg(test)]
+            startup_migration_retry_gate: None,
         }
     }
 
@@ -331,6 +343,26 @@ impl LocalThreadStore {
     /// Return the live local rollout path for legacy local-only code paths.
     pub async fn live_rollout_path(&self, thread_id: ThreadId) -> ThreadStoreResult<PathBuf> {
         live_writer::rollout_path(self, thread_id).await
+    }
+
+    /// Select only materialized rollout inputs without creating a file for untouched threads.
+    pub(crate) async fn feedback_rollout_path(
+        &self,
+        thread_id: ThreadId,
+    ) -> ThreadStoreResult<Option<PathBuf>> {
+        let (recorder, _, _) = live_writer::live_writer_parts(self, thread_id).await?;
+        if recorder
+            .unpersisted_session_meta()
+            .await
+            .map_err(|error| ThreadStoreError::Internal {
+                message: error.to_string(),
+            })?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        // Keep the path even if a materialized file was deleted: collection must report that error.
+        Ok(Some(recorder.rollout_path().to_path_buf()))
     }
 
     pub(super) async fn ensure_live_recorder_absent(
@@ -1059,6 +1091,7 @@ mod tests {
                     memory_mode: ThreadMemoryMode::Enabled,
                 },
             },
+            /*resume_preparation*/ None,
         )
         .await
         .expect("resume paginated thread from its requested rollout");
@@ -1409,6 +1442,7 @@ mod tests {
                     memory_mode: ThreadMemoryMode::Enabled,
                 },
             },
+            /*resume_preparation*/ None,
         )
         .await
         .expect("resume live thread");
@@ -1465,6 +1499,7 @@ mod tests {
                     memory_mode: ThreadMemoryMode::Enabled,
                 },
             },
+            /*resume_preparation*/ None,
         )
         .await
         .expect("resume external live thread");

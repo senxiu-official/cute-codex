@@ -34,12 +34,14 @@ use std::time::Duration;
 mod auth_file_api_key;
 mod capabilities;
 mod gateway_oauth;
+mod oauth_session;
 pub use auth_file_api_key::AuthFileApiKeyReader;
 pub use auth_file_api_key::set_auth_file_api_key_reader;
 pub use capabilities::ModelProviderCapabilities;
 pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
 pub use gateway_oauth::GatewayOAuthDelivery;
+pub use oauth_session::OAuthSessionConfig;
 
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 

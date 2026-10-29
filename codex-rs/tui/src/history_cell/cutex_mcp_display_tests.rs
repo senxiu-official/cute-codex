@@ -651,7 +651,11 @@ fn delegation_tools_new_and_old_names() {
             json!({"slug":"myapp-web","runtime":"external"}),
             json!({"ok":true}),
         ),
-        ("cutex_service_list", json!({"mine":true}), json!({"ok":true})),
+        (
+            "cutex_service_list",
+            json!({"mine":true}),
+            json!({"ok":true}),
+        ),
         (
             "agent_create",
             json!({"name":"worker","profile":"p"}),
@@ -728,7 +732,11 @@ fn delegation_tools_fall_back_on_unknown_shapes() {
     }
     // Other servers, missing targets and malformed arguments are not ours.
     for (server, tool, args) in [
-        ("other", "agent_delegate", json!({"target":"Kimi","text":"x"})),
+        (
+            "other",
+            "agent_delegate",
+            json!({"target":"Kimi","text":"x"}),
+        ),
         ("cutex", "agent_delegate", json!({"text":"x"})),
         ("cutex", "agent_wait", json!({"asks":"ask-1"})),
         ("cutex", "agent_list", json!(["x"])),

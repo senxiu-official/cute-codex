@@ -567,6 +567,19 @@ client_request_definitions! {
         serialization: thread_or_path(params.thread_id, params.path),
         response: v2::ThreadForkResponse,
     },
+    #[experimental("thread/sample")]
+    ThreadSample => "thread/sample" {
+        params: v2::ThreadSampleParams,
+        // Waiting for a sample must not block requests on its parent thread.
+        serialization: None,
+        response: v2::ThreadSampleResponse,
+    },
+    #[experimental("thread/sample/cancel")]
+    ThreadSampleCancel => "thread/sample/cancel" {
+        params: v2::ThreadSampleCancelParams,
+        serialization: None,
+        response: v2::ThreadSampleCancelResponse,
+    },
     ThreadArchive => "thread/archive" {
         params: v2::ThreadArchiveParams,
         serialization: thread_id(params.thread_id),
@@ -1416,6 +1429,12 @@ client_request_definitions! {
         params: v2::FeedbackUploadParams,
         serialization: None,
         response: v2::FeedbackUploadResponse,
+    },
+
+    FeedbackSave => "feedback/save" {
+        params: v2::FeedbackSaveParams,
+        serialization: None,
+        response: v2::FeedbackSaveResponse,
     },
 
     /// Execute a standalone command (argv vector) under the server's sandbox.
@@ -4129,6 +4148,7 @@ mod tests {
                 realtime_end_instructions: Some("Resume normal text responses.".to_string()),
                 prompt: Some(Some("You are on a call".to_string())),
                 realtime_session_id: Some("sess_456".to_string()),
+                voice_session_id: Some("voice_789".to_string()),
                 transport: None,
                 version: Some(RealtimeConversationVersion::V3),
                 voice: Some(RealtimeVoice::Marin),
@@ -4168,6 +4188,7 @@ mod tests {
                     "realtimeEndInstructions": "Resume normal text responses.",
                     "prompt": "You are on a call",
                     "realtimeSessionId": "sess_456",
+                    "voiceSessionId": "voice_789",
                     "transport": null,
                     "version": "v3",
                     "voice": "marin"
@@ -4200,6 +4221,7 @@ mod tests {
                 realtime_end_instructions: None,
                 prompt: None,
                 realtime_session_id: None,
+                voice_session_id: None,
                 transport: None,
                 version: None,
                 voice: None,
@@ -4225,6 +4247,7 @@ mod tests {
                     "realtimeStartInstructions": null,
                     "realtimeEndInstructions": null,
                     "realtimeSessionId": null,
+                    "voiceSessionId": null,
                     "transport": null,
                     "version": null,
                     "voice": null
@@ -4253,6 +4276,7 @@ mod tests {
                 realtime_end_instructions: None,
                 prompt: Some(None),
                 realtime_session_id: None,
+                voice_session_id: None,
                 transport: None,
                 version: None,
                 voice: None,
@@ -4279,6 +4303,7 @@ mod tests {
                     "realtimeEndInstructions": null,
                     "prompt": null,
                     "realtimeSessionId": null,
+                    "voiceSessionId": null,
                     "transport": null,
                     "version": null,
                     "voice": null

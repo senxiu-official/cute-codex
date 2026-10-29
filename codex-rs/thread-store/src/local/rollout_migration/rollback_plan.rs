@@ -92,7 +92,7 @@ impl RollbackPlan {
         // A rolled-back turn can still own the empty checkpoint that keeps cold resume from
         // replaying older history.
         if let Some(compacted) = self.compacted_items.get(&record_index) {
-            line.item = RolloutItem::Compacted(compacted.clone());
+            line.item = RolloutItem::Compacted(Box::new(compacted.clone()));
             return Ok(Some(line));
         }
         if boundary.is_some_and(|boundary| !self.boundary_alive[boundary]) {
@@ -268,7 +268,7 @@ impl RollbackPlanner {
                     record_index: index,
                     boundary_depth: self.boundary_stack.len(),
                     owner,
-                    item: item.clone(),
+                    item: item.as_ref().clone(),
                 });
             }
             RolloutItem::TurnContext(_) => {
@@ -585,6 +585,9 @@ fn user_response_matches_event(content: &[ContentItem], event: &UserMessageEvent
                     image_order.push(UserMessageImageKind::File);
                     file_ids.push(file_id.as_str());
                 }
+                // A saved local reference cannot prove equality with a legacy
+                // inline event without loading pixels; refuse ambiguous matching.
+                ImageReference::Saved { .. } => return false,
             },
             ContentItem::InputAudio { audio_url } => audio.push(audio_url.as_str()),
             ContentItem::OutputText { .. } => return false,

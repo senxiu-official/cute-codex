@@ -55,6 +55,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
         anyhow::bail!("expected initialize response, got {message:?}");
     };
     let InitializeResponse {
+        full_text_item_terminal,
         user_agent,
         codex_home: response_codex_home,
         platform_family,
@@ -67,6 +68,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
 
     assert!(user_agent.starts_with("codex_vscode/"));
     assert_eq!(response_codex_home, expected_codex_home);
+    assert!(full_text_item_terminal);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
     assert_eq!(external_input_version, None);

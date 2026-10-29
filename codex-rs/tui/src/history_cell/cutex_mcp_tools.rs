@@ -4,9 +4,9 @@
 //! results are read with the new keys first (`delegation`, `delegation_id`, `delegations`) and the
 //! old ones as fallback (`ask`, `ask_id`, `asks`). Presentation only: a result we do not recognise
 //! returns `None`, and the cell keeps its upstream rendering.
+use super::super::mcp::McpInvocation;
 use super::Outcome;
 use super::clean;
-use super::super::mcp::McpInvocation;
 use serde_json::Map;
 use serde_json::Value;
 
@@ -367,10 +367,7 @@ fn status(value: &Value, args: &Map<String, Value>) -> Option<Status> {
     }
     match value["ok"].as_bool()? {
         true => Some(Status::Ok),
-        false
-            if value["status"] == "response_uncertain"
-                || value["code"] == "outcome_unknown" =>
-        {
+        false if value["status"] == "response_uncertain" || value["code"] == "outcome_unknown" => {
             Some(Status::Uncertain)
         }
         false => {
@@ -550,7 +547,10 @@ pub(super) fn outcome(invocation: &McpInvocation, body: &str) -> Option<Outcome>
             let agents = value["agents"].as_array()?.len();
             for (keys, label) in [
                 (&["my_delegations", "my_asks"][..], "Your open delegations"),
-                (&["delegations_to_me", "asks_to_me"][..], "Delegations to you"),
+                (
+                    &["delegations_to_me", "asks_to_me"][..],
+                    "Delegations to you",
+                ),
                 (&["open_questions"][..], "Open questions"),
             ] {
                 if let Some(n) = count(&value, keys).filter(|n| *n > 0) {
@@ -567,7 +567,10 @@ pub(super) fn outcome(invocation: &McpInvocation, body: &str) -> Option<Outcome>
                 detail.push(message);
             }
             let head = join(spec.done, target);
-            match value["result"]["at"].as_str().filter(|at| !at.trim().is_empty()) {
+            match value["result"]["at"]
+                .as_str()
+                .filter(|at| !at.trim().is_empty())
+            {
                 Some(at) => format!("{head} · {}", clean(at)),
                 None => head,
             }

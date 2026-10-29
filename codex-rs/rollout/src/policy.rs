@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use crate::RolloutItem;
 use crate::protocol::EventMsg;
 use codex_extension_items::ExtensionItem;
+use codex_extension_items::image_generation::GeneratedImageRef;
 use codex_protocol::items::CommandExecutionItem;
 use codex_protocol::items::McpToolCallItem;
 use codex_protocol::items::TurnItem;
@@ -101,10 +102,11 @@ fn has_saved_generated_image_bytes(item: &RolloutItem) -> bool {
         RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => matches!(
             &event.item,
             TurnItem::Extension(ExtensionItem::ImageGeneration(image))
-                if image.saved_path.is_some() && !image.result.is_empty()
+                if image.saved_path.is_some() && matches!(&image.image, GeneratedImageRef::Inline { result } if !result.is_empty())
         ),
         RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(event)) => {
-            event.saved_path.is_some() && !event.result.is_empty()
+            event.saved_path.is_some()
+                && matches!(&event.image, GeneratedImageRef::Inline { result } if !result.is_empty())
         }
         _ => false,
     }
@@ -114,8 +116,9 @@ fn has_saved_generated_image_bytes(item: &RolloutItem) -> bool {
 /// `saved_path`: the path is kept and the inline base64 `result` is dropped.
 ///
 /// The image-generation item is a UI/history item only; the model sees the image
-/// through the tool's output item, which is persisted unchanged. A single
-/// generated image is several MB of base64, so a thread that generates many images
+/// through its prepared tool output. The writer also externalizes those pixels;
+/// request construction restores their exact bytes. A single generated image is
+/// several MB of base64, so a thread that generates many images
 /// otherwise grows its rollout and thread history by gigabytes. Readers that need
 /// the pixels load `saved_path`. Live notifications still carry `result`.
 /// Returns whether anything was stripped.
@@ -123,20 +126,109 @@ pub fn strip_saved_generated_image(item: &mut RolloutItem) -> bool {
     match item {
         RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => match &mut event.item {
             TurnItem::Extension(ExtensionItem::ImageGeneration(image))
-                if image.saved_path.is_some() && !image.result.is_empty() =>
+                if image.saved_path.is_some()
+                    && matches!(&image.image, GeneratedImageRef::Inline { result } if !result.is_empty()) =>
             {
-                image.result.clear();
+                if let GeneratedImageRef::Inline { result } = &mut image.image {
+                    result.clear();
+                }
                 true
             }
             _ => false,
         },
         RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(event))
-            if event.saved_path.is_some() && !event.result.is_empty() =>
+            if event.saved_path.is_some()
+                && matches!(&event.image, GeneratedImageRef::Inline { result } if !result.is_empty()) =>
         {
-            event.result.clear();
+            if let GeneratedImageRef::Inline { result } = &mut event.image {
+                result.clear();
+            }
             true
         }
         _ => false,
+    }
+}
+
+/// Replace generated tool images in the writer's copy only. Unknown hints or
+/// sidecar I/O failure retain inline bytes rather than lose data.
+pub(crate) fn externalize_saved_tool_images(item: &mut RolloutItem, codex_home: &std::path::Path) {
+    match item {
+        RolloutItem::ResponseItem(envelope) => {
+            externalize_response_images(&mut envelope.item, codex_home, false)
+        }
+        RolloutItem::Compacted(compacted) => {
+            for envelope in compacted.replacement_history.iter_mut().flatten() {
+                externalize_response_images(&mut envelope.item, codex_home, false);
+            }
+            if let Some(checkpoint) = &mut compacted.guardian_history {
+                for envelope in &mut checkpoint.0 {
+                    externalize_response_images(&mut envelope.item, codex_home, true);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn externalize_one(
+    image: &mut codex_protocol::models::ImageReference,
+    path: &str,
+    home: &std::path::Path,
+) {
+    use codex_protocol::models::ImageReference;
+    let ImageReference::Inline { image_url } = image else {
+        return;
+    };
+    match codex_protocol::saved_image::externalize(image_url, std::path::Path::new(path), home) {
+        Ok(Some(saved)) => *image = saved,
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, "could not save generated image reference; retaining inline history")
+        }
+    }
+}
+
+fn externalize_response_images(item: &mut ResponseItem, home: &std::path::Path, guardian: bool) {
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::saved_image::parse_saved_image_path;
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => {
+            let Some(parts) = output.content_items_mut() else {
+                return;
+            };
+            for index in 0..parts.len().saturating_sub(1) {
+                let path = match &parts[index + 1] {
+                    FunctionCallOutputContentItem::InputText { text } => {
+                        parse_saved_image_path(text).map(str::to_owned)
+                    }
+                    _ => None,
+                };
+                if let (Some(path), FunctionCallOutputContentItem::InputImage { image, .. }) =
+                    (path, &mut parts[index])
+                {
+                    externalize_one(image, &path, home);
+                }
+            }
+        }
+        // Guardian checkpoints represent trusted tool evidence as user messages.
+        ResponseItem::Message { content, .. } if guardian => {
+            for index in 0..content.len().saturating_sub(1) {
+                let path = match &content[index + 1] {
+                    ContentItem::InputText { text } => {
+                        parse_saved_image_path(text).map(str::to_owned)
+                    }
+                    _ => None,
+                };
+                if let (Some(path), ContentItem::InputImage { image, .. }) =
+                    (path, &mut content[index])
+                {
+                    externalize_one(image, &path, home);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -299,9 +391,13 @@ fn persisted_item_completed_event<'a>(
 ) -> Option<Cow<'a, EventMsg>> {
     match history_mode {
         ThreadHistoryMode::Legacy => {
-            // Legacy rollouts keep only items with no lossless raw ResponseItem or legacy
-            // equivalent.
+            // Keep full text terminals in both modes: they are display-only
+            // snapshots and also retain partial reasoning without forging model input.
+            // Other legacy items retain their existing raw/flattened representation.
             (matches!(
+                event.item,
+                TurnItem::AgentMessage(_) | TurnItem::Reasoning(_)
+            ) || matches!(
                 event.item,
                 TurnItem::FunctionCallOutput(_)
                     | TurnItem::Plan(_)
@@ -375,7 +471,10 @@ mod generated_image_persistence_tests {
                 id: "call-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("a cat".to_string()),
-                result: result.to_string(),
+                image: GeneratedImageRef::Inline {
+                    result: result.to_string(),
+                },
+                input_images: Vec::new(),
                 transparent_background: None,
                 failure: None,
                 saved_path,
@@ -406,24 +505,56 @@ mod generated_image_persistence_tests {
         let items = vec![completed(Some(saved_path()), &big), completed(None, &big)];
         let persisted = persisted_rollout_items(&items, ThreadHistoryMode::Paginated);
         assert_eq!(persisted.len(), 2);
-        assert_eq!(image_of(&persisted[0]).result, "");
+        assert_eq!(
+            image_of(&persisted[0]).image,
+            GeneratedImageRef::Inline {
+                result: String::new()
+            }
+        );
         assert_eq!(image_of(&persisted[0]).saved_path, Some(saved_path()));
         assert_eq!(
             image_of(&persisted[0]).revised_prompt.as_deref(),
             Some("a cat")
         );
         assert_eq!(
-            image_of(&persisted[1]).result.len(),
-            big.len(),
+            &image_of(&persisted[1]).image,
+            &GeneratedImageRef::Inline {
+                result: big.clone()
+            },
             "unsaved image keeps its bytes"
         );
         // The live (caller's) items are untouched: notifications still carry the image.
-        assert_eq!(image_of(&items[0]).result.len(), big.len());
+        assert_eq!(
+            &image_of(&items[0]).image,
+            &GeneratedImageRef::Inline {
+                result: big.clone()
+            }
+        );
         let line = serde_json::to_string(&persisted[0]).expect("serialize");
         assert!(
             line.len() < 1_000,
             "persisted line is small: {} bytes",
             line.len()
+        );
+    }
+
+    #[test]
+    fn attachment_references_are_not_replaced_by_saved_path_stripping() {
+        let mut item = completed(Some(saved_path()), "");
+        let RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) = &mut item else {
+            panic!("completed image");
+        };
+        let TurnItem::Extension(ExtensionItem::ImageGeneration(image)) = &mut event.item else {
+            panic!("generated image");
+        };
+        image.image = GeneratedImageRef::File {
+            file_id: "opaque-attachment".into(),
+        };
+        let original = serde_json::to_value(&item).expect("serialize image");
+        assert!(!strip_saved_generated_image(&mut item));
+        assert_eq!(
+            serde_json::to_value(&item).expect("serialize image"),
+            original
         );
     }
 
@@ -434,7 +565,10 @@ mod generated_image_persistence_tests {
                 call_id: "call-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: None,
-                result: "QUJD".to_string(),
+                image: GeneratedImageRef::Inline {
+                    result: "QUJD".to_string(),
+                },
+                input_images: Vec::new(),
                 transparent_background: None,
                 failure: None,
                 saved_path: Some(saved_path()),
@@ -443,9 +577,18 @@ mod generated_image_persistence_tests {
         let RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(event)) = &legacy else {
             panic!("legacy event");
         };
-        assert_eq!(event.result, "");
+        assert_eq!(
+            event.image,
+            GeneratedImageRef::Inline {
+                result: String::new()
+            }
+        );
         assert!(!strip_saved_generated_image(&mut legacy), "idempotent");
         let mut other = completed(None, "QUJD");
         assert!(!strip_saved_generated_image(&mut other));
     }
 }
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod tests;

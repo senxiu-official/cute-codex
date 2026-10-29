@@ -63,14 +63,19 @@ impl NodeReplReviewResponse {
             .saturating_add(self.items.iter().fold(0_usize, |bytes, item| {
                 bytes.saturating_add(match item {
                     Text { text, .. } => text.len(),
-                    Image {
-                        image: ImageReference::Inline { image_url },
-                        ..
-                    } => image_url.len(),
-                    Image {
-                        image: ImageReference::File { file_id },
-                        ..
-                    } => file_id.len(),
+                    Image { image, .. } => {
+                        let wire = codex_guardian_context::image_reference_bytes(image);
+                        match image {
+                            ImageReference::Saved { saved_image } => wire.max(
+                                saved_image
+                                    .saved_path
+                                    .len()
+                                    .saturating_add(saved_image.mime_type.len())
+                                    .saturating_add(saved_image.sha256.len()),
+                            ),
+                            _ => wire,
+                        }
+                    }
                     _ => 0,
                 })
             }))
@@ -126,12 +131,29 @@ impl NodeReplReviewEvidence {
                 Image {
                     image: ImageReference::Inline { image_url },
                     detail,
-                } if seen_images.insert(image_url) => Some(ContentItem::InputImage {
-                    image: ImageReference::Inline {
-                        image_url: image_url.clone(),
-                    },
-                    detail: *detail,
-                }),
+                } if seen_images.insert(("inline", image_url.as_str(), "", 0u64)) => {
+                    Some(ContentItem::InputImage {
+                        image: ImageReference::Inline {
+                            image_url: image_url.clone(),
+                        },
+                        detail: *detail,
+                    })
+                }
+                Image {
+                    image: image @ ImageReference::Saved { saved_image },
+                    detail,
+                } if seen_images.insert((
+                    "saved",
+                    saved_image.sha256.as_str(),
+                    saved_image.mime_type.as_str(),
+                    saved_image.byte_size,
+                )) =>
+                {
+                    Some(ContentItem::InputImage {
+                        image: image.clone(),
+                        detail: *detail,
+                    })
+                }
                 _ => None,
             })
             .collect()
@@ -314,3 +336,88 @@ impl NodeReplReviewEvidenceSnapshot {
 #[cfg(test)]
 #[path = "node_repl_review_evidence_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod saved_image_tests {
+    use super::*;
+    use codex_protocol::models::ImageDetail;
+    use codex_protocol::saved_image::SavedImage;
+
+    fn image(byte_size: u64) -> UserInput {
+        Image {
+            image: ImageReference::Saved {
+                saved_image: SavedImage {
+                    saved_path: "/missing/guardian-ledger-image.png".into(),
+                    mime_type: "image/png".into(),
+                    sha256: "a".repeat(64),
+                    byte_size,
+                    width: 1,
+                    height: 1,
+                },
+            },
+            detail: Some(ImageDetail::Original),
+        }
+    }
+
+    #[test]
+    fn saved_screenshots_are_retained_and_deduplicated_without_opening_files() {
+        let evidence = NodeReplReviewEvidence::default();
+        let saved = image(3);
+        evidence.record(
+            "node_repl",
+            "cell",
+            "call",
+            vec![saved.clone(), saved.clone()],
+        );
+        let images = evidence.images();
+        assert_eq!(images.len(), 1);
+        assert!(matches!(
+            &images[0],
+            ContentItem::InputImage {
+                image: ImageReference::Saved { .. },
+                detail: Some(ImageDetail::Original)
+            }
+        ));
+        let snapshot = evidence.snapshot_since(0).unwrap();
+        let rendered = snapshot
+            .context(NodeReplReviewEvidenceMode::Multimodal)
+            .render_inputs();
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|item| matches!(
+                    item,
+                    Image {
+                        image: ImageReference::Saved { .. },
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn saved_screenshot_caps_use_reconstructed_wire_bytes_and_keep_text() {
+        let evidence = NodeReplReviewEvidence::default();
+        evidence.record(
+            "node_repl",
+            "cell",
+            "call",
+            vec![
+                text_input("kept evidence".into()),
+                image(NodeReplReviewEvidence::MAX_RETAINED_BYTES as u64),
+            ],
+        );
+        assert!(evidence.images().is_empty());
+        let snapshot = evidence.snapshot_since(0).unwrap();
+        let rendered = snapshot
+            .context(NodeReplReviewEvidenceMode::Multimodal)
+            .render_inputs();
+        assert!(
+            rendered
+                .iter()
+                .any(|item| matches!(item, Text { text, .. } if text.contains("kept evidence")))
+        );
+    }
+}

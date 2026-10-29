@@ -22,9 +22,6 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashSet;
 
-const SAVED_IMAGE_HINT_PREFIX: &str = "Generated images are saved to ";
-const SAVED_IMAGE_HINT_SUFFIX: &str = " by default.";
-
 /// Identifies one image inside a tool output: (call id, content index).
 pub(super) type PutAwayImageKey = (String, usize);
 
@@ -34,27 +31,7 @@ struct ImageSlot<'a> {
     candidate: Option<(PutAwayImageKey, &'a str)>,
 }
 
-/// Returns the saved path from an image tool hint, if `text` is one.
-pub(super) fn parse_saved_image_path(text: &str) -> Option<&str> {
-    let first_line = text.lines().next()?;
-    let rest = first_line
-        .strip_prefix(SAVED_IMAGE_HINT_PREFIX)?
-        .strip_suffix(SAVED_IMAGE_HINT_SUFFIX)?;
-    // "<dir> as <path>"; either part may contain " as ", so prefer the split where the path
-    // lies under the directory and fall back to the last separator.
-    let splits: Vec<usize> = rest.match_indices(" as ").map(|(index, _)| index).collect();
-    let split = splits
-        .iter()
-        .copied()
-        .find(|&index| {
-            let dir = &rest[..index];
-            let path = &rest[index + 4..];
-            !dir.is_empty() && path.starts_with(dir)
-        })
-        .or_else(|| splits.last().copied())?;
-    let path = rest[split + 4..].trim();
-    (!path.is_empty()).then_some(path)
-}
+pub(super) use codex_protocol::saved_image::parse_saved_image_path;
 
 /// Model-visible text that replaces a put-away image.
 pub(super) fn put_away_image_placeholder(path: &str) -> String {

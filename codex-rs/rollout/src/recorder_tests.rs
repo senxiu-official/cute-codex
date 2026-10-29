@@ -49,7 +49,7 @@ fn test_config(codex_home: &Path) -> RolloutConfig {
 }
 
 fn paginated_session_meta_item(thread_id: ThreadId, cwd: &Path) -> RolloutItem {
-    RolloutItem::SessionMeta(SessionMetaLine {
+    RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: SessionMeta {
             session_id: thread_id.into(),
             id: thread_id,
@@ -62,7 +62,7 @@ fn paginated_session_meta_item(thread_id: ThreadId, cwd: &Path) -> RolloutItem {
             ..SessionMeta::default()
         },
         git: None,
-    })
+    }))
 }
 
 fn agent_message_item(message: &str) -> RolloutItem {
@@ -175,6 +175,31 @@ async fn opening_existing_rollout_preserves_modified_time() -> std::io::Result<(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn open_log_file_materializes_rollout_when_acl_denies_timestamp_changes() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let rollout_path = home.path().join("rollout.jsonl");
+    let compressed_path = rollout_path.with_extension("jsonl.zst");
+    fs::write(
+        &compressed_path,
+        zstd::stream::encode_all(&b"original\n"[..], 0)?,
+    )?;
+    let acl = std::process::Command::new("/bin/chmod")
+        .args(["+a", "everyone deny writeattr"])
+        .arg(&compressed_path)
+        .output()?;
+    assert!(acl.status.success(), "{acl:?}");
+
+    let mut file = open_log_file(&rollout_path)?;
+    file.write_all(b"appended\n")?;
+    drop(file);
+
+    assert!(!compressed_path.exists());
+    assert_eq!(fs::read(&rollout_path)?, b"original\nappended\n");
+    Ok(())
+}
+
 #[tokio::test]
 async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
     let home = TempDir::new().expect("temp dir");
@@ -224,7 +249,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
         RolloutLine {
             timestamp: "2026-01-27T12:34:56Z".to_string(),
             ordinal: None,
-            item: RolloutItem::SessionMeta(session_meta_line),
+            item: RolloutItem::SessionMeta(Box::new(session_meta_line)),
         },
         RolloutLine {
             timestamp: "2026-01-27T12:34:57Z".to_string(),
@@ -713,14 +738,14 @@ async fn recorder_preserves_additional_tools_in_both_history_modes() -> std::io:
             ResponseItem::AdditionalTools {
                 id: None,
                 role: "developer".to_string(),
-                tools: vec![serde_json::json!({
+                tools: Arc::from([serde_json::json!({
                     "type": "namespace",
                     "name": "functions",
                     "description": "Available tools.",
                     "tools": [{"type": "function", "name": "lookup",
                         "description": "Look up a value.",
                         "parameters": {"type": "object", "properties": {}}}]
-                })],
+                })]),
             }
             .into(),
         );
@@ -872,10 +897,20 @@ async fn referenced_paginated_rollout_starts_at_history_cutoff_and_resumes() -> 
     )
     .await?;
     let rollout_path = recorder.rollout_path().to_path_buf();
+    let initial_meta = recorder
+        .unpersisted_session_meta()
+        .await?
+        .expect("new rollout retains its creation metadata");
+    assert!(!rollout_path.exists());
     recorder.persist().await?;
+    assert!(recorder.unpersisted_session_meta().await?.is_none());
     recorder.shutdown().await?;
 
     let meta = crate::read_session_meta_line(&rollout_path).await?.meta;
+    assert_eq!(
+        serde_json::to_value(&initial_meta)?,
+        serde_json::to_value(&meta)?
+    );
     assert_eq!(
         meta.forked_from_ordinal_exclusive,
         Some(history_base.end_ordinal_exclusive)
@@ -883,6 +918,7 @@ async fn referenced_paginated_rollout_starts_at_history_cutoff_and_resumes() -> 
 
     let resumed =
         RolloutRecorder::new(&config, RolloutRecorderParams::resume(rollout_path.clone())).await?;
+    assert!(resumed.unpersisted_session_meta().await?.is_none());
     resumed
         .record_canonical_items(&[agent_message_item("first child record")])
         .await?;
@@ -2248,4 +2284,149 @@ async fn resumed_paginated_rollout_keeps_float_token_count_ordinal() -> std::io:
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(ordinals, vec![Some(0), Some(473), Some(474), Some(475)]);
     recorder.shutdown().await
+}
+
+#[tokio::test]
+async fn generated_tool_images_persist_as_refs_and_old_inline_rollouts_still_load()
+-> std::io::Result<()> {
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ImageDetail;
+    use codex_protocol::models::ImageReference;
+    for mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        let home = TempDir::new()?;
+        let original_file = home.path().join("generated.png");
+        // Valid synthetic PNG header/pixels; an extra output is never a real account image.
+        let bytes = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31,
+            0, 3, 3, 2, 0, 239, 156, 102, 231, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        fs::write(&original_file, bytes)?;
+        let url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+cZucAAAAASUVORK5CYII=".to_string();
+        let payload = || {
+            FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::Inline {
+                        image_url: url.clone(),
+                    },
+                    detail: Some(ImageDetail::High),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: format!(
+                        "Generated images are saved to {} as {} by default.",
+                        home.path().display(),
+                        original_file.display()
+                    ),
+                },
+            ])
+        };
+        let response = ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: Some("generated".into()),
+            name: None,
+            namespace: None,
+            output: payload(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let custom = ResponseItem::CustomToolCallOutput {
+            id: None,
+            call_id: "code-mode".into(),
+            name: None,
+            output: payload(),
+            internal_chat_message_metadata_passthrough: None,
+        };
+        let generated = RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(
+            codex_protocol::protocol::ImageGenerationEndEvent {
+                call_id: "generated".into(),
+                status: "completed".into(),
+                revised_prompt: None,
+                image: codex_extension_items::image_generation::GeneratedImageRef::Inline {
+                    result: url.strip_prefix("data:image/png;base64,").unwrap().into(),
+                },
+                input_images: Vec::new(),
+                transparent_background: None,
+                failure: None,
+                saved_path: Some(original_file.abs()),
+            },
+        ));
+        let compacted = RolloutItem::Compacted(serde_json::from_value(serde_json::json!({
+            "message":"synthetic compact", "replacement_history":[response.clone()], "guardian_history":[custom.clone()]
+        }))?);
+        let original = vec![
+            RolloutItem::ResponseItem(response.clone().into()),
+            RolloutItem::ResponseItem(custom.clone().into()),
+            generated,
+            compacted,
+        ];
+        let recorder = RolloutRecorder::new(
+            &test_config(home.path()),
+            RolloutRecorderParams::new(
+                ThreadId::new(),
+                None,
+                None,
+                SessionSource::Exec,
+                None,
+                "synthetic".into(),
+                BaseInstructions::default(),
+                Vec::new(),
+            )
+            .with_history_mode(mode),
+        )
+        .await?;
+        recorder.record_canonical_items(&original).await?;
+        recorder.flush().await?;
+        let jsonl = fs::read_to_string(recorder.rollout_path())?;
+        assert!(!jsonl.contains("base64"));
+        assert!(jsonl.contains("saved_image"));
+        assert!(
+            !jsonl.contains(url.strip_prefix("data:image/png;base64,").unwrap()),
+            "UI result also stays out of new rollout"
+        );
+        let (loaded, _, errors) =
+            RolloutRecorder::load_rollout_items(recorder.rollout_path()).await?;
+        assert_eq!(errors, 0);
+        let mut resumed: Vec<_> = loaded
+            .into_iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(envelope) => Some(envelope.item),
+                _ => None,
+            })
+            .collect();
+        codex_protocol::saved_image::hydrate_response_items(&mut resumed)?;
+        assert_eq!(resumed, vec![response.clone(), custom]);
+        // A read of a pre-fix inline rollout must not perform writer projection.
+        let old = home.path().join("old.jsonl");
+        let old_line = RolloutLine {
+            timestamp: "2026-10-24T00:00:00Z".into(),
+            ordinal: None,
+            item: RolloutItem::ResponseItem(response.into()),
+        };
+        let old_generated_line = RolloutLine {
+            timestamp: old_line.timestamp.clone(),
+            ordinal: None,
+            item: original[2].clone(),
+        };
+        fs::write(
+            &old,
+            format!(
+                "{}\n{}\n",
+                serde_json::to_string(&old_line)?,
+                serde_json::to_string(&old_generated_line)?
+            ),
+        )?;
+        let (legacy, _, errors) = RolloutRecorder::load_rollout_items(&old).await?;
+        assert_eq!(errors, 0);
+        assert_eq!(
+            serde_json::to_value(legacy)?,
+            serde_json::to_value(vec![old_line.item, old_generated_line.item])?,
+            "old tool data URLs and image-generation results load without writer stripping"
+        );
+        assert!(
+            serde_json::to_string(&original)?.contains("base64"),
+            "live items stay unchanged"
+        );
+        recorder.shutdown().await?;
+    }
+    Ok(())
 }

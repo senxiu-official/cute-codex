@@ -732,9 +732,11 @@ impl ContextManager {
         &self,
         base_instructions: &BaseInstructions,
     ) -> Option<i64> {
-        // Incremental windows already account for their recorded base instructions below.
-        let has_recorded_instructions =
-            self.raw_items().any(BaseInstructionsFragment::matches_item);
+        // Incremental windows supply instructions through history, including an empty base.
+        let has_recorded_instructions = self.has_tool_declarations()
+            || self
+                .raw_items()
+                .any(|item| BaseInstructionsFragment::text_from_item(item).is_some());
         let base_tokens = if has_recorded_instructions {
             0
         } else {
@@ -1377,6 +1379,16 @@ pub(crate) fn estimate_image_reference_bytes(
 ) -> i64 {
     match image {
         ImageReference::Inline { image_url } => estimate_image_bytes(image_url, detail),
+        ImageReference::Saved { saved_image } if detail == Some(ImageDetail::Original) => {
+            let patch = i64::from(ORIGINAL_IMAGE_PATCH_SIZE);
+            let wide = (i64::from(saved_image.width) + patch - 1) / patch;
+            let high = (i64::from(saved_image.height) + patch - 1) / patch;
+            let count = usize::try_from(wide.saturating_mul(high))
+                .unwrap_or(usize::MAX)
+                .min(ORIGINAL_IMAGE_MAX_PATCHES);
+            i64::try_from(approx_bytes_for_tokens(count)).unwrap_or(i64::MAX)
+        }
+        ImageReference::Saved { .. } => RESIZED_IMAGE_BYTES_ESTIMATE,
         ImageReference::File { .. } if detail == Some(ImageDetail::Original) => {
             i64::try_from(approx_bytes_for_tokens(ORIGINAL_IMAGE_MAX_PATCHES)).unwrap_or(i64::MAX)
         }

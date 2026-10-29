@@ -68,6 +68,28 @@ Revisions are equality tokens, not clocks: never compare or merge them across
 threads or hosts. When concurrent responses disagree, refresh with `thread/read`.
 Offscreen threads converge on page refresh.
 
+# Full public text item terminals
+
+Native 0.160.0-r52.4 and 0.163.0-r56 report `fullTextItemTerminal: true` in the `initialize`
+response. Missing or false means clients must retain their existing durable
+delta handling. This capability covers opened agent-message and reasoning items:
+normal completion uses the canonical item; cancellation, upstream errors, early
+EOF and forced task abort close remaining items with all observed public text
+before the terminal turn notification. Reasoning summary/content indices and
+empty parts are preserved. Omitted canonical reasoning content retains already
+streamed public parts; an explicit empty array clears them. A completed item is
+not closed again.
+
+Partial completions use the existing `item/completed` notification; the enclosing
+turn still reports its actual interrupted/failed status. Their full snapshots
+are retained in both legacy and paginated thread history/rollouts. Partial
+snapshots are display-only and are not replayed as synthetic model inputs.
+Flattened legacy text events remain available to older readers; current readers
+prefer the full terminal and suppress its compatibility echoes. Abrupt process
+termination cannot emit a terminal notification. This capability does not remove
+client-side transport size limits; relays must preserve full snapshots or supply
+an authoritative full-text reference when their inline event budget is exceeded.
+
 # Guardian circuit-breaker errors
 
 Set `auto_review.circuit_break_action = "strict"` to include `TooManyDenials` in

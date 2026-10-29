@@ -117,6 +117,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
             realtime_end_instructions: None,
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
+            voice_session_id: None,
             transport: None,
             version: None,
             voice: None,
@@ -757,6 +758,7 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
             expected_images.push(match image {
                 ImageReference::Inline { image_url } => image_url.clone(),
                 ImageReference::File { file_id } => file_id.clone(),
+                ImageReference::Saved { .. } => unreachable!("fixture uses inline user images"),
             });
         }
         let retained_images = follow_up

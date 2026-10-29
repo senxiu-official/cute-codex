@@ -308,3 +308,69 @@ fn strict_lowers_serialized_tools_from_history_items() {
     normalize_tool_json_strict(&mut other);
     assert_eq!(other, before);
 }
+
+#[test]
+fn strict_normalizes_boxed_enums_without_changing_the_source_specs() {
+    let original_schema = JsonSchema {
+        schema_type: Some(JsonSchemaType::Multiple(Box::new([
+            JsonSchemaPrimitiveType::String,
+            JsonSchemaPrimitiveType::Null,
+        ]))),
+        enum_values: Some(Box::new([
+            json!("auto"),
+            json!(1),
+            json!(true),
+            json!("1"),
+            json!(null),
+        ])),
+        ..JsonSchema::default()
+    };
+    let tools = vec![ToolSpec::Function(ResponsesApiTool {
+        name: "boxed_enum".to_string(),
+        description: String::new(),
+        strict: false,
+        defer_loading: None,
+        parameters: original_schema.clone(),
+        output_schema: None,
+    })];
+    let before = serde_json::to_string(&tools).unwrap();
+    let lowered = apply_tool_schema_compat(&tools, ToolSchemaCompat::Strict);
+    assert!(matches!(&lowered, Cow::Owned(_)));
+    assert_eq!(
+        parameters(&lowered[0]),
+        json!({"type": "string", "enum": ["auto", "1", "true"]})
+    );
+    assert_eq!(serde_json::to_string(&tools).unwrap(), before);
+    let ToolSpec::Function(original) = &tools[0] else {
+        panic!("function expected");
+    };
+    assert_eq!(original.parameters, original_schema);
+}
+
+#[test]
+fn strict_removes_null_only_boxed_enum_and_preserves_remaining_union_types() {
+    use JsonSchemaPrimitiveType::Integer;
+    use JsonSchemaPrimitiveType::Null;
+    use JsonSchemaPrimitiveType::String;
+
+    for (types, expected_type) in [
+        (vec![Null], None),
+        (vec![String, Null], Some(JsonSchemaType::Single(String))),
+        (
+            vec![String, Null, Integer],
+            Some(JsonSchemaType::Multiple(Box::new([String, Integer]))),
+        ),
+    ] {
+        let mut schema = JsonSchema {
+            schema_type: Some(JsonSchemaType::Multiple(types.into_boxed_slice())),
+            enum_values: Some(Box::new([json!(null)])),
+            ..JsonSchema::default()
+        };
+        normalize_json_schema_strict(&mut schema);
+        assert_eq!(schema.enum_values, None);
+        assert_eq!(schema.schema_type, expected_type);
+        let normalized = schema.clone();
+        normalize_json_schema_strict(&mut schema);
+        assert_eq!(schema, normalized, "normalization must be idempotent");
+    }
+}

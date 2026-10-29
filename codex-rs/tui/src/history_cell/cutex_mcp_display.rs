@@ -428,8 +428,8 @@ pub(super) fn title(invocation: &McpInvocation) -> Option<String> {
 
 #[path = "cutex_mcp_receipt.rs"]
 mod receipt;
-pub(super) use receipt::outcome;
 use receipt::Outcome;
+pub(super) use receipt::outcome;
 
 #[path = "cutex_mcp_tools.rs"]
 mod tools;

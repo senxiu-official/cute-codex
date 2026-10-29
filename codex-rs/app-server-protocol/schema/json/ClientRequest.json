@@ -684,6 +684,19 @@
               ],
               "title": "FileIdContentItem",
               "type": "object"
+            },
+            {
+              "description": "Native-only saved generated pixels; hydrated before any provider request.",
+              "properties": {
+                "saved_image": {
+                  "$ref": "#/definitions/SavedImage"
+                }
+              },
+              "required": [
+                "saved_image"
+              ],
+              "title": "SavedImageContentItem",
+              "type": "object"
             }
           ],
           "properties": {
@@ -1305,6 +1318,59 @@
       ],
       "type": "object"
     },
+    "FeedbackSaveParams": {
+      "properties": {
+        "classification": {
+          "type": "string"
+        },
+        "extraLogFiles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "includeLogs": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "savePath": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LegacyAppPathString"
+            }
+          ],
+          "description": "Absolute, previously unused ZIP path on the app-server host. The caller owns this file, including after a disconnected RPC."
+        },
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "classification",
+        "savePath"
+      ],
+      "type": "object"
+    },
     "FeedbackUploadParams": {
       "properties": {
         "classification": {
@@ -1602,6 +1668,19 @@
                 "file_id"
               ],
               "title": "FileIdFunctionCallOutputContentItem",
+              "type": "object"
+            },
+            {
+              "description": "Native-only saved generated pixels; hydrated before any provider request.",
+              "properties": {
+                "saved_image": {
+                  "$ref": "#/definitions/SavedImage"
+                }
+              },
+              "required": [
+                "saved_image"
+              ],
+              "title": "SavedImageFunctionCallOutputContentItem",
               "type": "object"
             }
           ],
@@ -4295,6 +4374,43 @@
           "type": "object"
         }
       ]
+    },
+    "SavedImage": {
+      "properties": {
+        "byteSize": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "savedPath": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "byteSize",
+        "height",
+        "mimeType",
+        "savedPath",
+        "sha256",
+        "width"
+      ],
+      "type": "object"
     },
     "SelectedCapabilityRoot": {
       "description": "A user-selected root that can expose one or more runtime capabilities.",
@@ -8605,6 +8721,30 @@
         "params"
       ],
       "title": "Feedback/uploadRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "feedback/save"
+          ],
+          "title": "Feedback/saveRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FeedbackSaveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Feedback/saveRequest",
       "type": "object"
     },
     {

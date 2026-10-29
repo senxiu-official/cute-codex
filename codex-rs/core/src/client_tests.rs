@@ -374,7 +374,7 @@ async fn client_setup_accepts_command_credential_refresh() {
 
         let setup = client.current_client_setup(routing).await.unwrap();
         let mut headers = http::HeaderMap::new();
-        setup.api_auth.add_auth_headers(&mut headers);
+        setup.api_auth.add_auth_headers(&mut headers).unwrap();
         assert_eq!(
             headers.get(http::header::AUTHORIZATION).unwrap(),
             "Bearer refreshed-token"
@@ -437,7 +437,7 @@ async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
         if expected_calls == 2 {
             let setup = result.unwrap();
             let mut headers = http::HeaderMap::new();
-            setup.api_auth.add_auth_headers(&mut headers);
+            setup.api_auth.add_auth_headers(&mut headers).unwrap();
             assert_eq!(
                 headers.get(http::header::AUTHORIZATION).unwrap(),
                 &format!("Bearer {refreshed_token}")
@@ -1543,7 +1543,7 @@ fn internal_session_prompt_cache_key_is_scoped_to_parent_thread() {
 
     assert_eq!(
         client.prompt_cache_key(&metadata),
-        format!("guardian:{parent_thread_id}")
+        Some(format!("guardian:{parent_thread_id}"))
     );
 }
 
@@ -2011,7 +2011,8 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
             mode: "managed",
             phase: "refresh_token",
         }),
-    );
+    )
+    .unwrap();
 
     assert_eq!(auth_context.auth_mode, Some("Chatgpt"));
     assert!(auth_context.auth_header_attached);
@@ -2031,7 +2032,8 @@ fn auth_request_telemetry_context_tracks_agent_identity_ids() {
             task_id: "task-run-context".to_string(),
         }),
         PendingUnauthorizedRetry::default(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         auth_context.agent_identity_telemetry(),
@@ -2143,11 +2145,11 @@ fn thread_responses_headers_are_scoped_to_model_and_backend_auth() {
     );
 }
 
-#[test_case::test_case(/*cache_key*/ None; "own_cache")]
-#[test_case::test_case(Some("parent-session"); "inherited_cache")]
+#[test_case::test_case(/*session_id_override*/ None; "own_session_id")]
+#[test_case::test_case(Some("parent-session"); "inherited_session_id")]
 #[tokio::test]
 async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
-    cache_key: Option<&str>,
+    session_id_override: Option<&str>,
 ) {
     let (mut model_client, attestation_calls) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
@@ -2159,7 +2161,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
         TestCodexResponsesRequestKind::WebsocketConnection,
     );
 
-    model_client.prompt_cache_key_override = cache_key.map(str::to_string);
+    model_client.session_id_override = session_id_override.map(str::to_string);
     let headers = model_client
         .build_websocket_headers(&responses_metadata)
         .await;
@@ -2173,7 +2175,7 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
     assert_eq!(
         headers["session-id"],
-        cache_key.unwrap_or(&responses_metadata.session_id)
+        session_id_override.unwrap_or(&responses_metadata.session_id)
     );
     assert_eq!(headers["thread-id"], responses_metadata.thread_id);
 }
@@ -2428,6 +2430,7 @@ fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() ->
     });
     // A tool `tool_search` loaded earlier travels in a history item.
     let loaded = serde_json::to_value(&tool)?;
+    let shared_declarations: Arc<[serde_json::Value]> = Arc::from([loaded.clone()]);
     let prompt = Prompt {
         tools: vec![tool].into(),
         input: vec![
@@ -2448,9 +2451,16 @@ fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() ->
                 tools: vec![loaded.clone()],
                 internal_chat_message_metadata_passthrough: None,
             },
+            ResponseItem::AdditionalTools {
+                id: None,
+                role: "developer".to_string(),
+                tools: Arc::clone(&shared_declarations),
+            },
         ],
         ..Prompt::default()
     };
+    let original_input = serde_json::to_value(&prompt.input)?;
+    let original_specs = serde_json::to_value(&prompt.tools)?;
     let request_tools = |compat: ToolSchemaCompat| -> anyhow::Result<serde_json::Value> {
         let client = test_model_client(SessionSource::Cli).with_tool_schema_compat(compat);
         let request = client.build_responses_request(
@@ -2478,11 +2488,29 @@ fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() ->
             })
             .map(|item| item["tools"].clone())
             .unwrap_or_default();
-        Ok(json!({"tools": request["tools"], "history": history_tools}))
+        let additional_tools = request["input"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["type"] == "additional_tools"))
+            .expect("additional tools remain in the request")["tools"]
+            .clone();
+        assert_eq!(serde_json::to_value(&prompt.input)?, original_input);
+        assert_eq!(serde_json::to_value(&prompt.tools)?, original_specs);
+        assert_eq!(shared_declarations.as_ref(), &[loaded.clone()]);
+        let ResponseItem::AdditionalTools { tools, .. } = &prompt.input[2] else {
+            panic!("additional tools expected");
+        };
+        assert!(Arc::ptr_eq(tools, &shared_declarations));
+        Ok(json!({
+            "tools": request["tools"],
+            "history": history_tools,
+            "additional": additional_tools,
+        }))
     };
 
     let off = request_tools(ToolSchemaCompat::Off)?;
-    assert_eq!(off["history"], json!([loaded]));
+    assert_eq!(off["history"], json!([loaded.clone()]));
+    assert_eq!(off["additional"], json!([loaded.clone()]));
+    let off_request = off.clone();
     let off = off["tools"].clone();
     assert_eq!(
         off,
@@ -2501,6 +2529,10 @@ fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() ->
         strict["history"][0]["parameters"],
         strict["tools"][0]["parameters"]
     );
+    assert_eq!(strict["additional"], strict["history"]);
+    // A later off request must still see the unnormalized shared history/specs.
+    assert_eq!(request_tools(ToolSchemaCompat::Off)?, off_request);
+    assert_eq!(request_tools(ToolSchemaCompat::Strict)?, strict);
     let strict = strict["tools"].clone();
     let properties = &strict[0]["parameters"]["properties"];
     assert_eq!(
@@ -2524,6 +2556,83 @@ fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() ->
     assert_eq!(
         strict[0]["parameters"]["required"],
         off[0]["parameters"]["required"]
+    );
+    Ok(())
+}
+
+#[test]
+fn saved_generated_images_reach_model_requests_with_identical_bytes_and_budget()
+-> anyhow::Result<()> {
+    use codex_protocol::models::FunctionCallOutputContentItem;
+    use codex_protocol::models::ImageDetail;
+    use codex_protocol::models::ImageReference;
+    let home = tempfile::tempdir()?;
+    let path = home.path().join("synthetic.png");
+    image::DynamicImage::new_rgb8(32, 64).save(&path)?;
+    let url = codex_utils_image::data_url_from_bytes("image/png", &std::fs::read(&path)?);
+    let inline = ImageReference::Inline { image_url: url };
+    let ImageReference::Inline { image_url } = &inline else {
+        unreachable!()
+    };
+    let saved = codex_protocol::saved_image::externalize(image_url, &path, home.path())?.unwrap();
+    for detail in [Some(ImageDetail::High), Some(ImageDetail::Original), None] {
+        assert_eq!(
+            crate::context_manager::estimate_image_reference_bytes(&saved, detail),
+            crate::context_manager::estimate_image_reference_bytes(&inline, detail)
+        );
+    }
+    let output = |image| ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: Some("generated".into()),
+        name: None,
+        namespace: None,
+        output: codex_protocol::models::FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image,
+                detail: Some(ImageDetail::High),
+            },
+        ]),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let client = test_model_client(SessionSource::Cli);
+    let metadata = test_responses_metadata_for_client(
+        &client,
+        None,
+        format!("{}:0", client.state.thread_id),
+        None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    let compact = Prompt {
+        input: vec![output(saved)],
+        ..Default::default()
+    };
+    let original = Prompt {
+        input: vec![output(inline)],
+        ..Default::default()
+    };
+    let build = |prompt: &Prompt| {
+        client.build_responses_request(
+            prompt,
+            &test_model_info(),
+            None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            None,
+            &metadata,
+            true,
+        )
+    };
+    assert_eq!(
+        serde_json::to_string(&build(&compact)?.input)?,
+        serde_json::to_string(&build(&original)?.input)?
+    );
+    assert!(
+        serde_json::to_string(&compact.input)?.contains("saved_image"),
+        "history remains compact"
+    );
+    std::fs::remove_file(path)?;
+    assert!(
+        build(&compact).is_err(),
+        "a missing image must not silently disappear from model input"
     );
     Ok(())
 }

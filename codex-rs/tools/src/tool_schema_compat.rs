@@ -161,7 +161,9 @@ fn normalize_enum(schema: &mut JsonSchema) {
     let Some(values) = schema.enum_values.as_mut() else {
         return;
     };
-    values.retain(|value| !value.is_null());
+    let mut non_null = std::mem::take(values).into_vec();
+    non_null.retain(|value| !value.is_null());
+    *values = non_null.into_boxed_slice();
     if values.is_empty() {
         // `enum: [null]` (or `[]`): nothing representable is left.
         schema.enum_values = None;
@@ -188,7 +190,7 @@ fn normalize_enum(schema: &mut JsonSchema) {
                     strings.push(text);
                 }
             }
-            *values = strings;
+            *values = strings.into_boxed_slice();
             schema.schema_type = Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::String));
         }
     }
@@ -196,8 +198,10 @@ fn normalize_enum(schema: &mut JsonSchema) {
 
 fn drop_null_from_type_union(schema: &mut JsonSchema) {
     if let Some(JsonSchemaType::Multiple(types)) = schema.schema_type.as_mut() {
-        types.retain(|schema_type| *schema_type != JsonSchemaPrimitiveType::Null);
-        match types.as_slice() {
+        let mut non_null = std::mem::take(types).into_vec();
+        non_null.retain(|schema_type| *schema_type != JsonSchemaPrimitiveType::Null);
+        *types = non_null.into_boxed_slice();
+        match types.as_ref() {
             [] => schema.schema_type = None,
             [single] => schema.schema_type = Some(JsonSchemaType::Single(*single)),
             _ => {}

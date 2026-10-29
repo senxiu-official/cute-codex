@@ -8,6 +8,7 @@ pub mod default_client;
 pub mod error;
 mod personal_access_token;
 mod selected_file;
+mod source;
 mod storage;
 pub use selected_file::configure_auth_file;
 mod util;

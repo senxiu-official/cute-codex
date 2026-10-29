@@ -119,6 +119,8 @@ fn remote_control_auth_dot_json(account_id: Option<&str>) -> AuthDotJson {
             id_token: parse_chatgpt_jwt_claims(&fake_jwt).expect("fake jwt should parse"),
             access_token: "Access Token".to_string(),
             refresh_token: "refresh-token".to_string(),
+            oauth_provenance: None,
+            login_owner_id: None,
             account_id: account_id.map(str::to_string),
         }),
         last_refresh: Some(chrono::Utc::now()),
@@ -1888,6 +1890,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
                 result: Box::new(
                     codex_app_server_protocol::ClientResponsePayload::Initialize(
                         codex_app_server_protocol::InitializeResponse {
+                            full_text_item_terminal: true,
                             external_input_version: None,
                             external_input_versions: None,
                             presentation_version: None,
@@ -1913,6 +1916,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             "message": {
                 "id": 11,
                 "result": {
+                    "fullTextItemTerminal": true,
                     "userAgent": "codex-test-agent",
                     "codexHome": codex_home.path(),
                     "platformFamily": "test-family",

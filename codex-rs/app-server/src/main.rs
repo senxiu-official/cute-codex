@@ -42,6 +42,9 @@ struct AppServerArgs {
     /// Read an ExternalInput launch binding (private socket or authenticated Windows loopback).
     #[arg(long, value_name = "ABS_PATH")]
     external_input_binding_file: Option<PathBuf>,
+    /// Load frozen cloud skills from a JSON snapshot instead of a live skill service.
+    #[arg(long, value_name = "PATH")]
+    cloud_skills_snapshot: Option<PathBuf>,
     #[command(flatten)]
     config_overrides: CliConfigOverrides,
 
@@ -105,6 +108,7 @@ fn main() -> anyhow::Result<()> {
             thread_retention_capability,
             auth_file,
             external_input_binding_file,
+            cloud_skills_snapshot,
             config_overrides,
             code_mode_host,
             listen,
@@ -136,6 +140,7 @@ fn main() -> anyhow::Result<()> {
         let auth = auth.try_into_settings()?;
         let mut runtime_options = AppServerRuntimeOptions {
             external_input_binding_file,
+            cloud_skills_snapshot,
             code_mode_host_transport: code_mode_host.into(),
             managed_daemon,
             ..Default::default()

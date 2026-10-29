@@ -6,6 +6,11 @@ import type { ExternalInputDelivery } from "./v2/ExternalInputDelivery";
 
 export type InitializeResponse = {
 /**
+ * Every opened public text item receives a full terminal snapshot, including
+ * cancellation, upstream failure and early EOF, retained in thread history.
+ */
+fullTextItemTerminal: boolean,
+/**
  * Private launch-bound common ExternalInput control API version, when enabled.
  */
 externalInputVersion?: number,

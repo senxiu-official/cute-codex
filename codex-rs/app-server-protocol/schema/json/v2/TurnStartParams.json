@@ -190,6 +190,19 @@
               ],
               "title": "FileIdFunctionCallOutputContentItem",
               "type": "object"
+            },
+            {
+              "description": "Native-only saved generated pixels; hydrated before any provider request.",
+              "properties": {
+                "saved_image": {
+                  "$ref": "#/definitions/SavedImage"
+                }
+              },
+              "required": [
+                "saved_image"
+              ],
+              "title": "SavedImageFunctionCallOutputContentItem",
+              "type": "object"
             }
           ],
           "properties": {
@@ -443,6 +456,43 @@
           "type": "object"
         }
       ]
+    },
+    "SavedImage": {
+      "properties": {
+        "byteSize": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "savedPath": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "byteSize",
+        "height",
+        "mimeType",
+        "savedPath",
+        "sha256",
+        "width"
+      ],
+      "type": "object"
     },
     "Settings": {
       "description": "Settings for a collaboration mode.",

@@ -14,7 +14,6 @@ use context_policy::ReviewContextPolicy;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -100,6 +99,14 @@ use codex_guardian_reviewer::run_before_review_deadline;
 use codex_guardian_reviewer::wait_for_guardian_review;
 
 const GUARDIAN_MAX_IMAGE_ITEM_TOKENS: i64 = 10_000;
+
+// Called only during actual review preparation, never while reading native history.
+fn hydrate_guardian_review_image(image: &mut ImageReference) -> std::io::Result<()> {
+    if matches!(image, ImageReference::Saved { .. }) {
+        *image = codex_protocol::saved_image::hydrate(image)?;
+    }
+    Ok(())
+}
 pub(crate) use codex_guardian_reviewer::GuardianReviewSessionOutcome;
 
 pub(crate) struct GuardianReviewSessionParams {
@@ -277,7 +284,7 @@ impl GuardianReviewSessionReuseKey {
     }
 
     fn with_node_repl_policy(mut self, policy: &GuardianNodeReplPolicy) -> Self {
-        self.node_repl_policy = policy.body();
+        self.node_repl_policy = policy.body().into_text().unwrap_or_default();
         self
     }
 }
@@ -581,26 +588,8 @@ async fn run_review_on_session(
                 .any(|(_, cost)| cost.image_count > 0)
             {
                 let reviewer_history = review_session.session.clone_history().await;
-                let mut reviewer_image_urls = HashSet::new();
-                let mut reviewer_file_ids = HashSet::new();
-                for item in reviewer_history.raw_items() {
-                    let ResponseItem::Message { content, .. } = item else {
-                        continue;
-                    };
-                    for item in content {
-                        let ContentItem::InputImage { image, .. } = item else {
-                            continue;
-                        };
-                        match image {
-                            ImageReference::Inline { image_url } => {
-                                reviewer_image_urls.insert(image_url.as_str());
-                            }
-                            ImageReference::File { file_id } => {
-                                reviewer_file_ids.insert(file_id.as_str());
-                            }
-                        }
-                    }
-                }
+                let mut reviewer_items = reviewer_history.raw_items().cloned().collect::<Vec<_>>();
+                codex_protocol::saved_image::hydrate_response_items(&mut reviewer_items)?;
                 let context_window = model_info.resolved_context_window().map(|supported| {
                     params
                         .spawn_config
@@ -621,7 +610,17 @@ async fn run_review_on_session(
                     } else {
                         ImagePreparationMode::DetailBased
                     };
-                    prompt_items.context.retain_images(|image, detail| {
+                    let mut image_restore_error = None;
+                    prompt_items.context.retain_new_images(&reviewer_items, |image, detail| {
+                        if image_restore_error.is_some() {
+                            return None;
+                        }
+                        let mut restored = image.clone();
+                        if let Err(error) = hydrate_guardian_review_image(&mut restored) {
+                            image_restore_error = Some(error);
+                            return None;
+                        }
+                        let image = &restored;
                         *detail = match normalize_output_image_detail(&model_info, *detail) {
                             _ if mode == ImagePreparationMode::UnifiedBudget => {
                                 Some(ImageDetail::Original)
@@ -631,22 +630,29 @@ async fn run_review_on_session(
                         };
                         match image {
                             ImageReference::Inline { image_url } => {
-                                let prepared_image_url = match resize_image(image_url, detail, mode)
-                                {
-                                    Ok(Some(prepared)) => Cow::Owned(prepared.into_data_url()),
-                                    Ok(None) => Cow::Borrowed(image_url),
+                                match resize_image(image_url, detail, mode) {
+                                    Ok(Some(prepared)) => Some(Cow::Owned(ImageReference::Inline {
+                                        image_url: prepared.into_data_url(),
+                                    })),
+                                    Ok(None) => Some(Cow::Owned(image.clone())),
                                     Err(error) => {
                                         warn!(%error, "failed to prepare guardian review image");
-                                        return false;
+                                        None
                                     }
-                                };
-                                !reviewer_image_urls.contains(prepared_image_url.as_str())
+                                }
                             }
-                            ImageReference::File { file_id } => {
-                                !reviewer_file_ids.contains(file_id.as_str())
+                            ImageReference::Saved { .. } => {
+                                image_restore_error = Some(std::io::Error::other(
+                                    "saved Guardian prompt image was not restored inline",
+                                ));
+                                None
                             }
+                            ImageReference::File { .. } => Some(Cow::Owned(image.clone())),
                         }
                     });
+                    if let Some(error) = image_restore_error {
+                        return Err(error.into());
+                    }
                     let prompt_tokens = prompt_items
                         .context
                         .clone()
@@ -804,25 +810,39 @@ async fn run_review_on_session(
         &mut analytics_result,
     )
     .await;
-    review_session
+    // Finalizing input consumes this context; failures before admission leave it pending.
+    let transcript_admitted = review_session
         .session
         .services
         .thread_extension_data
-        .remove::<super::input_budget::PendingReviewContext>();
-    if matches!(
+        .remove::<super::input_budget::PendingReviewContext>()
+        .is_none();
+    let completed_review = matches!(
         turn_result.outcome,
         GuardianReviewSessionOutcome::Completed(_)
-    ) {
-        if turn_result.turn_completed
-            && let Some(total_token_usage) = review_session.session.total_token_usage().await
-        {
-            analytics_result.token_usage = Some(token_usage_delta(
-                &token_usage_at_review_start,
-                &total_token_usage,
-            ));
-        }
+    );
+    if completed_review
+        && turn_result.turn_completed
+        && let Some(total_token_usage) = review_session.session.total_token_usage().await
+    {
+        analytics_result.token_usage = Some(token_usage_delta(
+            &token_usage_at_review_start,
+            &total_token_usage,
+        ));
+    }
+    if completed_review
+        || (transcript_admitted
+            && turn_result.turn_completed
+            && turn_result.disposition == SessionDisposition::Reusable)
+    {
         let mut state = review_session.state.lock().await;
-        state.conversation.complete_review(transcript_cursor);
+        if completed_review {
+            state.conversation.complete_review(transcript_cursor);
+        } else {
+            // A failed inference still retains its input. Keep admission progress
+            // in sync without counting the failure as a completed review.
+            state.conversation.admit_transcript(transcript_cursor);
+        }
         state.transcript_history_version = reviewer_history_version;
         state.transcript_source = Some(transcript_source);
     }
@@ -856,7 +876,10 @@ async fn run_review_on_session(
 }
 
 async fn ensure_guardian_followup_reminder(review_session: &GuardianReviewSession) {
-    let followup_reminder = GuardianFollowupReviewReminder.body();
+    let followup_reminder = GuardianFollowupReviewReminder
+        .body()
+        .into_text()
+        .unwrap_or_default();
     let already_injected = review_session
         .session
         .clone_history()
@@ -896,7 +919,7 @@ async fn ensure_guardian_node_repl_policy(
     }
 
     let policy = &params.node_repl_policy;
-    let policy_body = policy.body();
+    let policy_body = policy.body().into_text().unwrap_or_default();
     if policy_body.is_empty() {
         return Ok(());
     }
@@ -1022,5 +1045,38 @@ impl GuardianReviewSession {
 
     pub(crate) async fn send_trunk_event_raw_for_test(&self, event: Event) {
         self.session.send_event_raw(event).await;
+    }
+}
+
+#[cfg(test)]
+mod saved_image_tests {
+    use super::*;
+
+    #[test]
+    fn review_preparation_hydrates_saved_images_and_errors_instead_of_dropping_missing_evidence() {
+        const URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6V8AAAAASUVORK5CYII=";
+        let home = tempfile::tempdir().unwrap();
+        let saved = codex_protocol::saved_image::externalize(
+            URL,
+            &home.path().join("missing-original.png"),
+            home.path(),
+        )
+        .unwrap()
+        .unwrap();
+        let mut prepared = saved.clone();
+        hydrate_guardian_review_image(&mut prepared).unwrap();
+        assert_eq!(
+            prepared,
+            ImageReference::Inline {
+                image_url: URL.into()
+            }
+        );
+        let ImageReference::Saved { saved_image } = &saved else {
+            unreachable!()
+        };
+        std::fs::write(&saved_image.saved_path, b"changed synthetic evidence").unwrap();
+        assert!(hydrate_guardian_review_image(&mut saved.clone()).is_err());
+        std::fs::remove_file(&saved_image.saved_path).unwrap();
+        assert!(hydrate_guardian_review_image(&mut saved.clone()).is_err());
     }
 }

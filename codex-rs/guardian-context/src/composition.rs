@@ -23,11 +23,13 @@ use crate::BudgetPriority;
 use crate::Budgeted;
 use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
+use crate::Retention;
 use crate::SectionError;
 use crate::TranscriptContent;
 use crate::TranscriptFormat;
 use crate::TranscriptRecord;
 use crate::TruncationObservation;
+use crate::retained_instructions::RetainedInstructionKind;
 
 /// Consumer framing after the host has selected a full or delta transcript.
 pub enum ContextPresentation<'a> {
@@ -239,7 +241,14 @@ impl CollectedContext {
                                 content: ContentItem::InputText {
                                     text: format!("{}\n", item.content),
                                 },
-                                retention: item.retention,
+                                retention: match item.kind {
+                                    RetainedInstructionKind::UserInstruction
+                                    | RetainedInstructionKind::HostNotice
+                                    | RetainedInstructionKind::Framing => Retention::Required,
+                                    RetainedInstructionKind::AssistantContext => {
+                                        Retention::Optional(BudgetPriority::Commentary)
+                                    }
+                                },
                                 source: item.source,
                             })
                             .collect(),
@@ -347,13 +356,12 @@ impl CollectedContext {
                                 Some(Ok(Budgeted::required(ContentItem::InputText { text })))
                             }
                             UserInput::Image {
-                                image: ImageReference::Inline { image_url },
+                                image:
+                                    image @ (ImageReference::Inline { .. }
+                                    | ImageReference::Saved { .. }),
                                 detail,
                             } => Some(Ok(Budgeted::optional(
-                                ContentItem::InputImage {
-                                    image: ImageReference::Inline { image_url },
-                                    detail,
-                                },
+                                ContentItem::InputImage { image, detail },
                                 BudgetPriority::Image,
                             ))),
                             UserInput::Image {

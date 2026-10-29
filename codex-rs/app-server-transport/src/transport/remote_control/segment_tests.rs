@@ -136,6 +136,7 @@ fn invalid_response_becomes_remote_control_jsonrpc_error() {
             message: Box::new(OutgoingMessage::Response(OutgoingResponse {
                 id: RequestId::Integer(7),
                 result: Box::new(ClientResponsePayload::Initialize(InitializeResponse {
+                    full_text_item_terminal: true,
                     external_input_version: None,
                     external_input_versions: None,
                     presentation_version: None,

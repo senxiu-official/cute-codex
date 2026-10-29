@@ -63,6 +63,11 @@
         "null"
       ]
     },
+    "fullTextItemTerminal": {
+      "default": false,
+      "description": "Every opened public text item receives a full terminal snapshot, including cancellation, upstream failure and early EOF, retained in thread history.",
+      "type": "boolean"
+    },
     "platformFamily": {
       "description": "Platform family for the running app-server target, for example `\"unix\"` or `\"windows\"`.",
       "type": "string"

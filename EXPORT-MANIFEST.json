@@ -19,8 +19,8 @@
     },
     {
       "path": ".github/cute-codex/sign-and-upload.sh",
-      "sha256": "033a95c3a396c38f45921c26fe288f486c1a961557010df355e4efe2d90f94c1",
-      "size": 31059
+      "sha256": "f627eec11dfeeaf5c4a6e341b8e04ba771bc0f286bc66290991327a3d5a63413",
+      "size": 31189
     },
     {
       "path": ".github/cute-codex/third_party_notices.py",
@@ -84,8 +84,8 @@
     },
     {
       "path": "codex-rs/app-server/README.md",
-      "sha256": "9e0f46842ddeda2f3fec1ae42842fa06fd0f699dba67fde52b6126dcc00f709b",
-      "size": 41125
+      "sha256": "3901a48e80dcb68e47bab16dc3362e4a248142de7fd26ba26b0ac12f00e0dd64",
+      "size": 41137
     },
     {
       "path": "codex-rs/app-server/src/bespoke_event_handling.rs",

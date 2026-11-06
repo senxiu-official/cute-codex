@@ -70,7 +70,7 @@ Offscreen threads converge on page refresh.
 
 # Full public text item terminals
 
-Native 0.160.0-r52.4 and 0.163.0-r56 report `fullTextItemTerminal: true` in the `initialize`
+Runtimes supporting complete-text terminal items report `fullTextItemTerminal: true` in the `initialize`
 response. Missing or false means clients must retain their existing durable
 delta handling. This capability covers opened agent-message and reasoning items:
 normal completion uses the canonical item; cancellation, upstream errors, early

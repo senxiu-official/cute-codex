@@ -11,6 +11,7 @@ use codex_protocol::models::ResponseItem;
 pub(crate) fn without_notification_media(notification: ServerNotification) -> ServerNotification {
     match notification {
         ServerNotification::ThreadExternalInputStatusChanged(_) => notification,
+        ServerNotification::ThreadToolGateChanged(_) => notification,
         ServerNotification::ItemStarted(mut notification) => {
             notification.item = without_thread_item_media(notification.item);
             ServerNotification::ItemStarted(notification)

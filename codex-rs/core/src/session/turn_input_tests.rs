@@ -1133,6 +1133,7 @@ async fn steer_preserves_request_origin(
             metadata: crate::session::UserInputMetadata {
                 acceptance_order: Some(0),
                 origin,
+                ..Default::default()
             },
         }]
     );

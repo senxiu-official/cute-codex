@@ -5118,6 +5118,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     );
 
     let without_override = TurnStartParams {
+        owner_carries: None,
         disabled_plugin_ids: None,
         thread_id: "thread_123".to_string(),
         client_user_message_id: None,
@@ -5514,4 +5515,19 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
             path
         );
     }
+}
+
+#[test]
+fn owner_carries_initialize_is_a_top_level_numeric_capability() {
+    let mut response: crate::InitializeResponse = serde_json::from_value(serde_json::json!({
+        "userAgent": "test", "codexHome": std::env::current_dir().unwrap(),
+        "platformFamily": "test", "platformOs": "test"
+    }))
+    .unwrap();
+    let disabled = serde_json::to_value(&response).unwrap();
+    assert!(disabled.get("ownerInputCarries").is_none());
+    response.owner_input_carries = Some(1);
+    let enabled = serde_json::to_value(&response).unwrap();
+    assert_eq!(enabled["ownerInputCarries"], serde_json::json!(1));
+    assert!(enabled.get("capabilities").is_none());
 }

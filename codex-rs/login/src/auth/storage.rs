@@ -163,6 +163,22 @@ pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
 }
 
+/// Advisory lock beside `auth.json` that serializes token refresh across processes
+/// sharing one file store. It only coordinates and never holds credential bytes.
+pub(super) const REFRESH_LOCK_FILE_NAME: &str = "auth.json.lock";
+
+/// Opens (creating if needed) the refresh lock file at `path` with owner-only
+/// permissions. The returned handle is never written to.
+pub(super) fn open_refresh_lock_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
     let auth_file = get_auth_file(codex_home);
     match std::fs::remove_file(&auth_file) {
@@ -189,6 +205,11 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
     }
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
     fn delete(&self) -> std::io::Result<bool>;
+    /// Opens the cross-process refresh lock for file-backed stores. Stores whose
+    /// writes are not shared through one file (keyring, auto, ephemeral) return `None`.
+    fn open_refresh_lock(&self) -> Option<std::io::Result<File>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -245,6 +266,12 @@ impl AuthStorageBackend for FileAuthStorage {
 
     fn delete(&self) -> std::io::Result<bool> {
         delete_file_if_exists(&self.codex_home)
+    }
+
+    fn open_refresh_lock(&self) -> Option<std::io::Result<File>> {
+        Some(open_refresh_lock_file(
+            &self.codex_home.join(REFRESH_LOCK_FILE_NAME),
+        ))
     }
 }
 

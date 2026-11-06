@@ -20,8 +20,12 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 /// Host capture metadata belonging to one input, including steers within another turn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserInputMetadata {
+    /// Volatile reservation: only the queued owner input keeps it alive. Never restored
+    /// as independently eligible input, nor serialized into a second user message.
+    #[serde(skip)]
+    pub(crate) owner_carries: Option<Arc<Vec<codex_protocol::external_input::Envelope>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acceptance_order: Option<u64>,
     #[serde(

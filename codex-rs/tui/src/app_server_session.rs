@@ -1478,6 +1478,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::TurnStart {
                 request_id,
                 params: TurnStartParams {
+                    owner_carries: None,
                     disabled_plugin_ids: None,
                     thread_id: thread_id.to_string(),
                     turn_trigger: Some("user".to_string()),
@@ -1550,6 +1551,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::TurnSteer {
                 request_id,
                 params: TurnSteerParams {
+                    owner_carries: None,
                     thread_id: thread_id.to_string(),
                     client_user_message_id: Some(client_user_message_id),
                     input: items,

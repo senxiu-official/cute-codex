@@ -172,6 +172,54 @@ pub struct ExternalInputStatusChangedNotification {
     pub message_id: String,
 }
 
+/// cutex fork: agent pause at the next tool boundary. `held: true` makes every
+/// later tool call of the bound thread wait before it starts; `false` lets the
+/// waiting calls run in the same turn. Same launch binding as ExternalInput.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolGateSetParams {
+    pub version: u32,
+    pub owner_id: String,
+    pub thread_id: String,
+    pub runtime_generation: u64,
+    pub held: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolGateHeldCall {
+    pub call_id: String,
+    pub tool: String,
+    pub turn_id: String,
+    /// The thread the call belongs to: the bound thread or one of its
+    /// sub-agent threads (they wait on the root's gate).
+    pub thread_id: String,
+    #[ts(type = "number")]
+    pub since_ms: i64,
+}
+
+/// The gate and the calls waiting at it, oldest first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolGateSetResponse {
+    pub thread_id: String,
+    pub held: bool,
+    pub waiting: Vec<ToolGateHeldCall>,
+}
+
+/// Sent whenever the gate or its waiting calls change.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct ToolGateChangedNotification {
+    pub thread_id: String,
+    pub held: bool,
+    pub waiting: Vec<ToolGateHeldCall>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

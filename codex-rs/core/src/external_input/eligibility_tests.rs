@@ -15,6 +15,7 @@ fn runtime() -> Runtime {
         owner: "owner".into(),
         recovery: recover("owner", "thread", &[]).unwrap(),
         pending: Vec::new(),
+        owner_carries: BTreeMap::new(),
         paused: false,
         poisoned: false,
         retries: BTreeMap::new(),

@@ -43,6 +43,8 @@ pub(crate) struct Runtime {
     pub owner: String,
     pub recovery: Recovery,
     pub pending: Vec<Pending>,
+    /// Weak reservations cannot outlive refused, blocked or cancelled owner input.
+    pub owner_carries: BTreeMap<String, std::sync::Weak<Vec<Envelope>>>,
     pub paused: bool,
     /// Set before fallible writes. Cancellation and uncertain completion leave
     /// it set, preventing subsequent sampling until strict process recovery.
@@ -93,6 +95,11 @@ impl Runtime {
     /// Pending admissions plus unfinished committed obligations.
     pub(crate) fn admission_load(&self) -> usize {
         self.pending.len()
+            + self
+                .owner_carries
+                .values()
+                .filter(|entry| entry.strong_count() > 0)
+                .count()
             + self
                 .recovery
                 .messages

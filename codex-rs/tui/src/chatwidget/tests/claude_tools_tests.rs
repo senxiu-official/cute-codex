@@ -67,21 +67,21 @@ async fn fable_quota_is_independent_and_never_falls_back_to_weekly() {
         );
     }
     assert_eq!(
-        chat.status_line_value(StatusLineItem::CutexSimpleWeeklyLimit),
+        chat.status_line_value_for_item(StatusLineItem::CutexSimpleWeeklyLimit),
         Some("W — 80%".into())
     );
     assert_eq!(
-        chat.status_line_value(StatusLineItem::CutexFableLimit),
+        chat.status_line_value_for_item(StatusLineItem::CutexFableLimit),
         Some("F — 30%".into())
     );
     assert_eq!(
-        chat.status_line_value(StatusLineItem::CutexFableLimitBar),
+        chat.status_line_value_for_item(StatusLineItem::CutexFableLimitBar),
         Some("F[███       ]30% —".into())
     );
     chat.rate_limit_snapshots_by_limit_id
         .remove("claude-model-fable");
     assert_eq!(
-        chat.status_line_value(StatusLineItem::CutexFableLimit),
+        chat.status_line_value_for_item(StatusLineItem::CutexFableLimit),
         None
     );
 }

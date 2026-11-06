@@ -753,6 +753,19 @@ impl ToolRegistry {
             }
         }
 
+        // cutex fork: a paused agent's call waits here, before it starts
+        // (tool_gate.rs). Interrupt cancels the wait; the tool does not run.
+        invocation
+            .session
+            .tool_gate
+            .wait(
+                &invocation.call_id,
+                &tool_name.to_string(),
+                &invocation.turn.sub_id,
+            )
+            .or_cancel_tool(&cancellation_token)
+            .await?;
+
         if tool.mcp_server_name().is_none() {
             notify_tool_start(&invocation, /*mcp_tool*/ None)
                 .or_cancel_tool(&cancellation_token)

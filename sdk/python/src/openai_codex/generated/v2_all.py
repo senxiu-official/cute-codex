@@ -6632,6 +6632,24 @@ class ToolExposureSurface(Enum):
     direct = "direct"
 
 
+class ToolGateHeldCall(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    call_id: Annotated[str, Field(alias="callId")]
+    since_ms: Annotated[int, Field(alias="sinceMs")]
+    thread_id: Annotated[
+        str,
+        Field(
+            alias="threadId",
+            description="The thread the call belongs to: the bound thread or one of its sub-agent threads (they wait on the root's gate).",
+        ),
+    ]
+    tool: str
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class TurnDiffUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10871,6 +10889,16 @@ class ThreadUsage(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class ToolGateChangedNotification(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    held: bool
+    thread_id: Annotated[str, Field(alias="threadId")]
+    waiting: list[ToolGateHeldCall]
+
+
 class ToolsV2(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11776,6 +11804,23 @@ class ThreadPresentationAppendedServerNotification(BaseModel):
         Field(title="Thread/presentation/appendedNotificationMethod"),
     ]
     params: PresentationAppendedNotification
+
+
+class ThreadToolGateChangedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["thread/toolGate/changed"], Field(title="Thread/toolGate/changedNotificationMethod")
+    ]
+    params: ToolGateChangedNotification
 
 
 class ThreadSettingsUpdatedServerNotification(BaseModel):
@@ -13596,6 +13641,7 @@ class ServerNotification(
         | ThreadGoalClearedServerNotification
         | ThreadPresentationAppendedServerNotification
         | ThreadExternalInputStatusChangedServerNotification
+        | ThreadToolGateChangedServerNotification
         | ThreadQueueChangedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification
@@ -13689,6 +13735,7 @@ class ServerNotification(
         | ThreadGoalClearedServerNotification
         | ThreadPresentationAppendedServerNotification
         | ThreadExternalInputStatusChangedServerNotification
+        | ThreadToolGateChangedServerNotification
         | ThreadQueueChangedServerNotification
         | ProjectChangedServerNotification
         | ThreadProjectUpdatedServerNotification

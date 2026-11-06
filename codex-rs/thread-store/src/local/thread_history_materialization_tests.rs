@@ -3046,6 +3046,7 @@ async fn projection_store(codex_home: &Path) -> LocalThreadStore {
 #[tokio::test]
 async fn saved_generated_images_reach_the_rollout_by_path_only() {
     use codex_extension_items::ExtensionItem;
+    use codex_extension_items::image_generation::GeneratedImageRef;
     use codex_extension_items::image_generation::ImageGenerationItem;
 
     let home = TempDir::new().expect("temp dir");
@@ -3066,10 +3067,13 @@ async fn saved_generated_images_reach_the_rollout_by_path_only() {
                 id: "call-1".to_string(),
                 status: "completed".to_string(),
                 revised_prompt: Some("a cat".to_string()),
-                result: result.clone(),
+                image: GeneratedImageRef::Inline {
+                    result: result.clone(),
+                },
                 transparent_background: None,
                 failure: None,
                 saved_path,
+                input_images: Vec::new(),
                 imagegen_request_id: None,
                 generation_id: None,
             })),
@@ -3887,16 +3891,13 @@ async fn cancelled_multibatch_rebuild_rolls_back_rows_version_and_checkpoint() {
     }
     append_suffix(&path, &suffix);
 
-    // A one-connection pool makes the SQLite hook deterministic. This is the actual async
-    // materializer, not a copied producer or a cancellation predicate detached from SQLite.
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(store.config.sqlite.thread_history_db_path()),
-        )
-        .await
-        .expect("single connection to existing history DB");
+    // Retain the production SQLite shim and reserve every connection but one so the
+    // update hook observes the actual async materializer deterministically.
+    let pool = original_pool.clone();
+    let mut reserved_connections = Vec::new();
+    for _ in 1..pool.options().get_max_connections() {
+        reserved_connections.push(pool.acquire().await.expect("reserve unused connection"));
+    }
     store.thread_history_db = Arc::new(tokio::sync::OnceCell::new_with(Some(pool.clone())));
     let (reached, waiting) = tokio::sync::oneshot::channel();
     let (release, resume) = std::sync::mpsc::channel();
@@ -4001,4 +4002,56 @@ async fn cancelled_multibatch_rebuild_rolls_back_rows_version_and_checkpoint() {
             601
         )
     );
+}
+
+#[tokio::test]
+async fn shortened_projected_rollout_fails_without_replacing_index() {
+    for version in [3_i64, 4] {
+        let (_home, store, thread_id, path, pool, _) = crash_residue_projection_fixture().await;
+        append_suffix(
+            &path,
+            &format!("{}\n", rollout_line(Some(1), turn_started("retained"))),
+        );
+        super::materialize_to_sqlite(&store, thread_id, &path)
+            .await
+            .expect("seed index");
+        sqlx::query("UPDATE thread_history_projection_state SET external_input_version = ? WHERE thread_id = ?")
+            .bind(version).bind(thread_id.to_string()).execute(&pool).await.expect("select projection revision");
+        sqlx::query("UPDATE thread_turns SET status = 'unchanged-sentinel' WHERE thread_id = ?")
+            .bind(thread_id.to_string())
+            .execute(&pool)
+            .await
+            .expect("mark old index");
+        let before = projection_state(&pool, thread_id).await;
+        let original = fs::read_to_string(&path).expect("durable rollout");
+        let mut meta: serde_json::Value =
+            serde_json::from_str(original.lines().next().expect("metadata line"))
+                .expect("metadata JSON");
+        // Keep metadata valid and the file newline-terminated, but remove a projected record.
+        // Neither migration nor ordinary catch-up may reinterpret that as an empty suffix.
+        meta["ordinal"] = serde_json::json!(0);
+        fs::write(&path, format!("{meta}\n")).expect("shorten durable history");
+        assert!(fs::metadata(&path).expect("length").len() < before.0 as u64);
+        let error = super::materialize_to_sqlite(&store, thread_id, &path)
+            .await
+            .expect_err("shortened projected prefix must fail closed");
+        assert!(
+            error.to_string().contains("durable rollout shrank"),
+            "{error}"
+        );
+        assert_eq!(projection_state(&pool, thread_id).await, before);
+        let actual_version: i64 = sqlx::query_scalar("SELECT external_input_version FROM thread_history_projection_state WHERE thread_id = ?")
+            .bind(thread_id.to_string()).fetch_one(&pool).await.expect("retained revision");
+        assert_eq!(actual_version, version);
+        let turns: Vec<(String, String)> =
+            sqlx::query_as("SELECT turn_id, status FROM thread_turns WHERE thread_id = ?")
+                .bind(thread_id.to_string())
+                .fetch_all(&pool)
+                .await
+                .expect("retained rows");
+        assert_eq!(
+            turns,
+            vec![("retained".to_string(), "unchanged-sentinel".to_string())]
+        );
+    }
 }

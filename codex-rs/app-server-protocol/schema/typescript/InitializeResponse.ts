@@ -31,7 +31,17 @@ externalInputDeliveries?: Array<ExternalInputDelivery>,
  * submit, `thread/externalInput/resume` and `thread/externalInput/interrupt`.
  * Absent on older servers.
  */
-externalInputControlVersion?: number, userAgent: string,
+externalInputControlVersion?: number,
+/**
+ * Atomic owner input + canonical ExternalInput envelopes on turn/start and turn/steer.
+ */
+ownerInputCarries?: number,
+/**
+ * cutex fork: `thread/toolGate/set` and `thread/toolGate/changed` on the
+ * bound receiver (agent pause at the next tool boundary). Absent on older
+ * servers.
+ */
+toolGateVersion?: number, userAgent: string,
 /**
  * Absolute path to the server's $CODEX_HOME directory.
  */

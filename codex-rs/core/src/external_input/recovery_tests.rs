@@ -224,14 +224,14 @@ async fn pending_commit_with_crash_residue_tail_still_restores() {
 
     let (commit, pair_items) = pair();
     let thread_id = codex_protocol::ThreadId::new();
-    let mut items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+    let mut items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: SessionMeta {
             session_id: thread_id.into(),
             id: thread_id,
             ..SessionMeta::default()
         },
         git: None,
-    })];
+    }))];
     items.extend(pair_items);
     let home = tempfile::TempDir::new().unwrap();
     let path = home.path().join("rollout.jsonl");

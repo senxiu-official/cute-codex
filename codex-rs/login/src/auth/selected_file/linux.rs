@@ -186,4 +186,20 @@ impl AuthStorageBackend for SelectedFile {
         self.check_parent()?;
         Ok(true)
     }
+    fn open_refresh_lock(&self) -> Option<io::Result<File>> {
+        // Same custody rules as auth.json: pinned parent, no symlinks, owner-only regular file.
+        Some((|| {
+            self.check_parent()?;
+            let mut name = self.name.clone();
+            name.push(".lock");
+            let fd = openat(
+                &self.parent,
+                &name,
+                OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR,
+            )?;
+            private_file(&fstat(&fd)?)?;
+            Ok(File::from(fd))
+        })())
+    }
 }

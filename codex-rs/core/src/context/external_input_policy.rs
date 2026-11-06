@@ -23,7 +23,8 @@ impl Default for CanonicalBytePolicy {
 }
 
 impl CanonicalBytePolicy {
-    pub(crate) fn permits(self, bytes: usize) -> bool {
+    /// Check the serialized canonical item against the trusted receiver limit.
+    pub fn permits(self, bytes: usize) -> bool {
         match self {
             Self::Limit(limit) => bytes as u64 <= u64::from(limit.get()),
             Self::Off => true,

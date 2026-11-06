@@ -129,6 +129,125 @@
       ],
       "type": "string"
     },
+    "ExternalInputDelivery": {
+      "enum": [
+        "after_turn",
+        "passive",
+        "soon"
+      ],
+      "type": "string"
+    },
+    "ExternalInputEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "$ref": "#/definitions/ExternalInputMessage"
+        },
+        "ownerId": {
+          "type": "string"
+        },
+        "runtimeGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "semanticSha256": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExternalInputView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "ownerId",
+        "runtimeGeneration",
+        "semanticSha256",
+        "threadId",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ExternalInputMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "delivery": {
+          "$ref": "#/definitions/ExternalInputDelivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/ExternalInputSource"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delivery",
+        "id",
+        "source",
+        "text",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ExternalInputSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ExternalInputSourceKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ExternalInputSourceKind": {
+      "enum": [
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ExternalInputView": {
+      "additionalProperties": false,
+      "properties": {
+        "data": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "schema"
+      ],
+      "type": "object"
+    },
     "FunctionCallOutputBody": {
       "anyOf": [
         {
@@ -872,6 +991,16 @@
     },
     "outputSchema": {
       "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
+    },
+    "ownerCarries": {
+      "description": "Canonical external items consumed only with this owner input. Never pre-submit these.",
+      "items": {
+        "$ref": "#/definitions/ExternalInputEnvelope"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "parentTurnId": {
       "description": "ID of the turn that caused this new turn to start.\n\nSet this when starting work on behalf of another turn, such as delegated work in a different thread. Leave unset for work started directly by the user. Ignored when this request adds input to an active turn.",

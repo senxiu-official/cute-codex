@@ -98,6 +98,16 @@ pub struct InitializeResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub external_input_control_version: Option<u32>,
+    /// Atomic owner input + canonical ExternalInput envelopes on turn/start and turn/steer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub owner_input_carries: Option<u32>,
+    /// cutex fork: `thread/toolGate/set` and `thread/toolGate/changed` on the
+    /// bound receiver (agent pause at the next tool boundary). Absent on older
+    /// servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tool_gate_version: Option<u32>,
     pub user_agent: String,
     /// Absolute path to the server's $CODEX_HOME directory.
     pub codex_home: AbsolutePathBuf,

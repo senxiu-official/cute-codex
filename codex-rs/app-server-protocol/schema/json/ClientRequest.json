@@ -1237,6 +1237,52 @@
       ],
       "type": "string"
     },
+    "ExternalInputEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "$ref": "#/definitions/ExternalInputMessage"
+        },
+        "ownerId": {
+          "type": "string"
+        },
+        "runtimeGeneration": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "semanticSha256": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "view": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExternalInputView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "ownerId",
+        "runtimeGeneration",
+        "semanticSha256",
+        "threadId",
+        "version"
+      ],
+      "type": "object"
+    },
     "ExternalInputMessage": {
       "additionalProperties": false,
       "properties": {
@@ -6155,6 +6201,16 @@
         "outputSchema": {
           "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
         },
+        "ownerCarries": {
+          "description": "Canonical external items consumed only with this owner input. Never pre-submit these.",
+          "items": {
+            "$ref": "#/definitions/ExternalInputEnvelope"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "parentTurnId": {
           "description": "ID of the turn that caused this new turn to start.\n\nSet this when starting work on behalf of another turn, such as delegated work in a different thread. Leave unset for work started directly by the user. Ignored when this request adds input to an active turn.",
           "type": [
@@ -6260,6 +6316,16 @@
             "$ref": "#/definitions/UserInput"
           },
           "type": "array"
+        },
+        "ownerCarries": {
+          "description": "Canonical external items consumed only with this owner input. Never pre-submit these.",
+          "items": {
+            "$ref": "#/definitions/ExternalInputEnvelope"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "threadId": {
           "type": "string"

@@ -363,12 +363,7 @@ mod saved_image_tests {
     fn saved_screenshots_are_retained_and_deduplicated_without_opening_files() {
         let evidence = NodeReplReviewEvidence::default();
         let saved = image(3);
-        evidence.record(
-            "node_repl",
-            "cell",
-            "call",
-            vec![saved.clone(), saved.clone()],
-        );
+        evidence.record("node_repl", "cell", "call", vec![saved.clone(), saved]);
         let images = evidence.images();
         assert_eq!(images.len(), 1);
         assert!(matches!(

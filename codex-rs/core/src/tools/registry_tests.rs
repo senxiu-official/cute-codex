@@ -819,6 +819,91 @@ async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyh
     Ok(())
 }
 
+/// cutex fork (tool_gate.rs): a closed gate holds the call before it starts;
+/// opening it runs the call; interrupt cancels a held call, which never starts.
+#[tokio::test]
+async fn closed_tool_gate_holds_dispatch_before_start() -> anyhow::Result<()> {
+    let (mut session, turn) = crate::session::tests::make_session_and_context().await;
+    let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    builder.tool_lifecycle_contributor(Arc::new(ToolLifecycleRecorder {
+        records: Arc::clone(&records),
+    }));
+    session.services.extensions = Arc::new(builder.build());
+    let tool = codex_tools::ToolName::plain("ok_tool");
+    let handler = Arc::new(LifecycleTestHandler {
+        tool_name: tool.clone(),
+        result: LifecycleTestResult::Ok { success: true },
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = Arc::new(ToolRegistry::from_tools([handler]));
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let name = codex_tools::ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "ok_tool");
+    let timeout = std::time::Duration::from_secs(5);
+
+    assert!(session.tool_gate.set(true).held);
+    let mut changes = session.tool_gate.subscribe();
+    let held = test_invocation(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        "held-call",
+        name.clone(),
+    );
+    let dispatch = {
+        let registry = Arc::clone(&registry);
+        tokio::spawn(async move {
+            registry
+                .dispatch_any_with_state(held, None)
+                .await
+                .map(|_| ())
+        })
+    };
+    tokio::time::timeout(timeout, changes.wait_for(|state| state.waiting.len() == 1)).await??;
+    assert_eq!(session.tool_gate.snapshot().waiting[0].call_id, "held-call");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!dispatch.is_finished());
+    assert!(
+        records.lock().expect("records").is_empty(),
+        "nothing starts while held"
+    );
+    session.tool_gate.set(false);
+    tokio::time::timeout(timeout, dispatch).await???;
+    assert!(matches!(
+        records.lock().expect("records").first(),
+        Some(RecordedToolLifecycle::Start { call_id, .. }) if call_id == "held-call"
+    ));
+
+    // Interrupt while held: the call is cancelled and never starts.
+    records.lock().expect("records").clear();
+    session.tool_gate.set(true);
+    let cancelled = test_invocation(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        "cancelled-call",
+        name,
+    );
+    let token = cancelled.cancellation_token.clone();
+    let dispatch = {
+        let registry = Arc::clone(&registry);
+        tokio::spawn(async move {
+            registry
+                .dispatch_any_with_state(cancelled, None)
+                .await
+                .map(|_| ())
+        })
+    };
+    tokio::time::timeout(timeout, changes.wait_for(|state| state.waiting.len() == 1)).await??;
+    token.cancel();
+    let result = tokio::time::timeout(timeout, dispatch).await??;
+    assert!(result.is_err(), "a cancelled held call fails");
+    assert!(session.tool_gate.snapshot().waiting.is_empty());
+    assert!(
+        records.lock().expect("records").is_empty(),
+        "the cancelled call never started"
+    );
+    Ok(())
+}
+
 fn test_invocation(
     session: Arc<crate::session::session::Session>,
     turn: Arc<crate::session::turn_context::TurnContext>,

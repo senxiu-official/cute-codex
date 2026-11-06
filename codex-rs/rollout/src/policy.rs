@@ -526,9 +526,7 @@ mod generated_image_persistence_tests {
         // The live (caller's) items are untouched: notifications still carry the image.
         assert_eq!(
             &image_of(&items[0]).image,
-            &GeneratedImageRef::Inline {
-                result: big.clone()
-            }
+            &GeneratedImageRef::Inline { result: big }
         );
         let line = serde_json::to_string(&persisted[0]).expect("serialize");
         assert!(

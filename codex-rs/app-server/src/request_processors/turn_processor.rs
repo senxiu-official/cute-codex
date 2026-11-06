@@ -693,6 +693,7 @@ impl TurnRequestProcessor {
         let submission = thread
             .start_or_steer_turn(
                 TurnInputRequest::new(input)
+                    .with_owner_carries(params.owner_carries.unwrap_or_default())
                     .with_thread_settings(thread_settings)
                     .on_start(TurnStartOptions {
                         turn_trigger: params.turn_trigger,
@@ -1120,6 +1121,7 @@ impl TurnRequestProcessor {
                     content: mapped_items,
                     client_id: params.client_user_message_id,
                 })
+                .with_owner_carries(params.owner_carries.unwrap_or_default())
                 .with_additional_context(additional_context)
                 .with_responses_metadata(params.responsesapi_client_metadata)
                 .with_responses_metadata_patch(params.responsesapi_client_metadata_patch),

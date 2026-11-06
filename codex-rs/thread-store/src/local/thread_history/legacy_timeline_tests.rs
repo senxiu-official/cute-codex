@@ -9,14 +9,14 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 fn history(thread_id: ThreadId, names: &[&str]) -> String {
-    let mut items = vec![RolloutItem::SessionMeta(SessionMetaLine {
+    let mut items = vec![RolloutItem::SessionMeta(Box::new(SessionMetaLine {
         meta: SessionMeta {
             session_id: thread_id.into(),
             id: thread_id,
             ..Default::default()
         },
         git: None,
-    })];
+    }))];
     for name in names {
         items.push(RolloutItem::EventMsg(EventMsg::TurnStarted(
             TurnStartedEvent {

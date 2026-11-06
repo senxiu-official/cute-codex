@@ -2495,7 +2495,7 @@ fn tool_schema_compat_strict_lowers_request_tool_enums_and_off_is_unchanged() ->
             .clone();
         assert_eq!(serde_json::to_value(&prompt.input)?, original_input);
         assert_eq!(serde_json::to_value(&prompt.tools)?, original_specs);
-        assert_eq!(shared_declarations.as_ref(), &[loaded.clone()]);
+        assert_eq!(shared_declarations.as_ref(), std::slice::from_ref(&loaded));
         let ResponseItem::AdditionalTools { tools, .. } = &prompt.input[2] else {
             panic!("additional tools expected");
         };

@@ -684,6 +684,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ExternalInputInterruptResponse,
     },
+    #[experimental("thread/toolGate/set")]
+    ThreadToolGateSet => "thread/toolGate/set" {
+        params: v2::ToolGateSetParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ToolGateSetResponse,
+    },
     #[experimental("thread/queue/add")]
     ThreadQueueAdd => "thread/queue/add" {
         params: v2::ThreadQueueAddParams,
@@ -2030,6 +2036,8 @@ server_notification_definitions! {
     #[experimental("thread/queue/changed")]
     ThreadPresentationAppended => "thread/presentation/appended" (v2::PresentationAppendedNotification),
     ThreadExternalInputStatusChanged => "thread/externalInput/statusChanged" (v2::ExternalInputStatusChangedNotification),
+    #[experimental("thread/toolGate/changed")]
+    ThreadToolGateChanged => "thread/toolGate/changed" (v2::ToolGateChangedNotification),
     ThreadQueueChanged => "thread/queue/changed" (v2::ThreadQueueChangedNotification),
     #[experimental("project/changed")]
     ProjectChanged => "project/changed" (v2::ProjectChangedNotification),

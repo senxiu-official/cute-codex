@@ -54,6 +54,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ThreadExternalInputStatusChanged(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ThreadToolGateChanged(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ThreadStatusChanged(notification) => {
             Some(notification.thread_id.as_str())
         }

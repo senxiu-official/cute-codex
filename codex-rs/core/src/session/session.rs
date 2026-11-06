@@ -60,6 +60,8 @@ type McpToolApprovalMetadataMap =
 pub(crate) struct Session {
     pub(crate) presentation: Mutex<()>,
     pub(crate) external_input: Mutex<Option<crate::external_input::Runtime>>,
+    /// cutex fork: agent pause at the next tool boundary.
+    pub(crate) tool_gate: crate::tool_gate::ToolGate,
     pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
@@ -1862,6 +1864,7 @@ impl Session {
                 agent_status,
                 state: Mutex::new(state),
                 external_input: Mutex::new(None),
+                tool_gate: crate::tool_gate::ToolGate::register(thread_id, parent_thread_id),
                 presentation: Mutex::new(()),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
                 code_mode_message_tasks: CodeModeMessageTasks::default(),

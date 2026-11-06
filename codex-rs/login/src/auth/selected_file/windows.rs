@@ -50,6 +50,10 @@ impl AuthStorageBackend for SelectedFile {
     fn delete(&self) -> io::Result<bool> {
         self.storage.delete()
     }
+
+    fn open_refresh_lock(&self) -> Option<io::Result<File>> {
+        self.storage.open_refresh_lock()
+    }
 }
 
 #[cfg(test)]

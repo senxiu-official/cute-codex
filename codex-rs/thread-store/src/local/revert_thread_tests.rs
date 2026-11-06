@@ -113,15 +113,25 @@ async fn revert_keeps_thread_id_and_hides_suffix_across_repeated_reverts() {
         .await
         .expect("read replacement rollout");
     let (meta_line, remaining_lines) = rollout.split_once('\n').expect("session metadata line");
+    let original_meta_len = meta_line.len();
     let mut meta_line: serde_json::Value = serde_json::from_str(meta_line).expect("parse metadata");
     let payload = meta_line["payload"]
         .as_object_mut()
         .expect("metadata payload");
     payload.remove("creator_user_id");
     payload.remove("creator_account_id");
+    // The projected prefix is immutable: omitting fields must not invalidate byte offsets
+    // already stored in SQLite or in a descendant's history_base cutoff. JSON whitespace
+    // models the old reader's missing fields while preserving every following record offset.
+    let meta_line = serde_json::to_string(&meta_line).expect("serialize legacy metadata");
+    let padding = " ".repeat(
+        original_meta_len
+            .checked_sub(meta_line.len())
+            .expect("metadata shrank"),
+    );
     tokio::fs::write(
         &first_replacement_path,
-        format!("{meta_line}\n{remaining_lines}"),
+        format!("{meta_line}{padding}\n{remaining_lines}"),
     )
     .await
     .expect("write legacy replacement rollout");
@@ -480,13 +490,17 @@ async fn presentation_rebuild_revert_and_corrupt_source_are_explicit() {
     assert_ne!(contents, corrupted);
     let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
     std::fs::write(&path, corrupted).unwrap();
-    std::fs::File::open(&path)
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
         .unwrap()
         .set_modified(modified + std::time::Duration::from_secs(1))
         .unwrap();
     assert!(store.list_timeline(params()).await.is_err());
     std::fs::write(&path, contents).unwrap();
-    std::fs::File::open(&path)
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
         .unwrap()
         .set_modified(modified + std::time::Duration::from_secs(2))
         .unwrap();

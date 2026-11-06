@@ -63,6 +63,8 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
         external_input_version,
         presentation_version,
         external_input_control_version,
+        owner_input_carries,
+        tool_gate_version,
         ..
     } = to_response::<InitializeResponse>(response)?;
 
@@ -74,6 +76,8 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     assert_eq!(external_input_version, None);
     assert_eq!(presentation_version, None);
     assert_eq!(external_input_control_version, None);
+    assert_eq!(owner_input_carries, None);
+    assert_eq!(tool_gate_version, None);
     Ok(())
 }
 
@@ -183,6 +187,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
         external_input_version,
         presentation_version,
         external_input_control_version,
+        tool_gate_version,
         ..
     } = to_response::<InitializeResponse>(response)?;
 
@@ -193,6 +198,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     assert_eq!(external_input_version, None);
     assert_eq!(presentation_version, None);
     assert_eq!(external_input_control_version, None);
+    assert_eq!(tool_gate_version, None);
     Ok(())
 }
 

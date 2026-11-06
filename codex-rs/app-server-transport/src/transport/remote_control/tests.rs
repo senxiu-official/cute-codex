@@ -1896,6 +1896,8 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
                             presentation_version: None,
                             external_input_deliveries: None,
                             external_input_control_version: None,
+                            owner_input_carries: None,
+                            tool_gate_version: None,
                             user_agent: "codex-test-agent".to_string(),
                             codex_home: codex_home.path().abs(),
                             platform_family: "test-family".to_string(),

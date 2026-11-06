@@ -105,4 +105,8 @@ impl AuthStorageBackend for ObservedStorage {
         telemetry.record_delete_attempt(store, &result);
         result
     }
+
+    fn open_refresh_lock(&self) -> Option<std::io::Result<std::fs::File>> {
+        self.inner.open_refresh_lock()
+    }
 }

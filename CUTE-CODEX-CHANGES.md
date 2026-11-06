@@ -9,12 +9,14 @@ Authors); files under "Added files" are new in cute-codex and are licensed under
 Apache License, Version 2.0. The exact changes are the difference between `rust-v0.164.0` and this
 release commit.
 
-## Modified upstream files (349)
+## Modified upstream files (364)
 
 - CHANGELOG.md
 - README.md
 - codex-rs/Cargo.lock
 - codex-rs/Cargo.toml
+- codex-rs/analytics/src/client_tests.rs
+- codex-rs/analytics/src/tests/suite/turns/requests_tests.rs
 - codex-rs/app-server-client/src/lib.rs
 - codex-rs/app-server-client/src/remote.rs
 - codex-rs/app-server-protocol/schema/json/ClientRequest.json
@@ -43,6 +45,7 @@ release commit.
 - codex-rs/app-server-protocol/schema/json/v2/TurnStartParams.json
 - codex-rs/app-server-protocol/schema/json/v2/TurnStartResponse.json
 - codex-rs/app-server-protocol/schema/json/v2/TurnStartedNotification.json
+- codex-rs/app-server-protocol/schema/json/v2/TurnSteerParams.json
 - codex-rs/app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst
 - codex-rs/app-server-protocol/schema/precomputed/app-server-exports-stable.json.zst
 - codex-rs/app-server-protocol/schema/typescript/ContentItem.ts
@@ -54,6 +57,8 @@ release commit.
 - codex-rs/app-server-protocol/schema/typescript/v2/ThreadItem.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ThreadTimelineEntry.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ThreadTokenUsage.ts
+- codex-rs/app-server-protocol/schema/typescript/v2/TurnStartParams.ts
+- codex-rs/app-server-protocol/schema/typescript/v2/TurnSteerParams.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/index.ts
 - codex-rs/app-server-protocol/scripts/write_schema_fixtures.py
 - codex-rs/app-server-protocol/src/lib.rs
@@ -88,8 +93,12 @@ release commit.
 - codex-rs/app-server/src/request_processors/turn_processor.rs
 - codex-rs/app-server/src/user_verification_test_support.rs
 - codex-rs/app-server/tests/common/models_cache.rs
+- codex-rs/app-server/tests/suite/v2/client_metadata.rs
 - codex-rs/app-server/tests/suite/v2/connection_handling_websocket.rs
 - codex-rs/app-server/tests/suite/v2/initialize.rs
+- codex-rs/app-server/tests/suite/v2/realtime_conversation.rs
+- codex-rs/app-server/tests/suite/v2/turn_start.rs
+- codex-rs/app-server/tests/suite/v2/turn_steer.rs
 - codex-rs/cli/src/main.rs
 - codex-rs/cli/tests/debug_models.rs
 - codex-rs/codex-api/src/common.rs
@@ -126,6 +135,7 @@ release commit.
 - codex-rs/core/src/lib.rs
 - codex-rs/core/src/mcp_tool_call.rs
 - codex-rs/core/src/session/code_mode_warning_tests.rs
+- codex-rs/core/src/session/input_queue.rs
 - codex-rs/core/src/session/mcp.rs
 - codex-rs/core/src/session/mod.rs
 - codex-rs/core/src/session/rollout_reconstruction.rs
@@ -137,6 +147,7 @@ release commit.
 - codex-rs/core/src/session/turn.rs
 - codex-rs/core/src/session/turn_context.rs
 - codex-rs/core/src/session/turn_input.rs
+- codex-rs/core/src/session/turn_input_tests.rs
 - codex-rs/core/src/stream_events_utils.rs
 - codex-rs/core/src/tasks/compact.rs
 - codex-rs/core/src/tasks/mod.rs
@@ -144,6 +155,8 @@ release commit.
 - codex-rs/core/src/thread_manager_tests.rs
 - codex-rs/core/src/tools/mod.rs
 - codex-rs/core/src/tools/parallel.rs
+- codex-rs/core/src/tools/registry.rs
+- codex-rs/core/src/tools/registry_tests.rs
 - codex-rs/core/src/tools/runtimes/mod.rs
 - codex-rs/core/src/tools/spec_plan_tests.rs
 - codex-rs/core/tests/suite/approvals.rs
@@ -161,10 +174,10 @@ release commit.
 - codex-rs/core/tests/suite/remote_models.rs
 - codex-rs/core/tests/suite/request_permissions.rs
 - codex-rs/core/tests/suite/rmcp_client.rs
-- codex-rs/core/tests/suite/scenarios.rs
 - codex-rs/core/tests/suite/spawn_agent_description.rs
 - codex-rs/core/tests/suite/view_image.rs
 - codex-rs/exec-server/src/process_sandbox.rs
+- codex-rs/exec/src/lib.rs
 - codex-rs/exec/tests/event_processor_with_json_output.rs
 - codex-rs/ext/goal/src/api.rs
 - codex-rs/ext/goal/src/extension.rs
@@ -200,7 +213,9 @@ release commit.
 - codex-rs/login/src/auth/manager.rs
 - codex-rs/login/src/auth/mod.rs
 - codex-rs/login/src/auth/storage.rs
+- codex-rs/login/src/auth/storage_telemetry.rs
 - codex-rs/login/src/lib.rs
+- codex-rs/login/tests/suite/auth_refresh.rs
 - codex-rs/login/tests/suite/mod.rs
 - codex-rs/memories/write/src/phase1.rs
 - codex-rs/memories/write/src/rollout_input.rs
@@ -361,14 +376,16 @@ release commit.
 - sdk/python/src/openai_codex/generated/v2_all.py
 - sdk/python/tests/test_contract_generation.py
 
-## Added files (166)
+## Added files (172)
 
 - codex-rs/app-server-protocol/schema/json/v2/ExternalInputStatusChangedNotification.json
 - codex-rs/app-server-protocol/schema/json/v2/PresentationAppendedNotification.json
+- codex-rs/app-server-protocol/schema/json/v2/ToolGateChangedNotification.json
 - codex-rs/app-server-protocol/schema/typescript/SavedImage.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputAdmission.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputDelivery.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputDeliveryState.ts
+- codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputEnvelope.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputHoldReason.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputMessage.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputMessageKey.ts
@@ -387,6 +404,8 @@ release commit.
 - codex-rs/app-server-protocol/schema/typescript/v2/PresentationFormat.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/PresentationReference.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/PresentationReferenceKind.ts
+- codex-rs/app-server-protocol/schema/typescript/v2/ToolGateChangedNotification.ts
+- codex-rs/app-server-protocol/schema/typescript/v2/ToolGateHeldCall.ts
 - codex-rs/app-server-protocol/src/protocol/external_input_projection.rs
 - codex-rs/app-server-protocol/src/protocol/external_input_projection_tests.rs
 - codex-rs/app-server-protocol/src/protocol/thread_history_text_echo.rs
@@ -418,11 +437,13 @@ release commit.
 - codex-rs/core/src/session/external_input_exclusive_tests.rs
 - codex-rs/core/src/session/external_input_migration.rs
 - codex-rs/core/src/session/external_input_processing.rs
+- codex-rs/core/src/session/owner_carries_tests.rs
 - codex-rs/core/src/session/presentation.rs
 - codex-rs/core/src/session/text_terminal_abort_tests.rs
 - codex-rs/core/src/session/text_terminals.rs
 - codex-rs/core/src/session/text_terminals_tests.rs
 - codex-rs/core/src/session/turn_input_origin_tests.rs
+- codex-rs/core/src/tool_gate.rs
 - codex-rs/core/src/tools/repeated_failures.rs
 - codex-rs/core/src/tools/repeated_failures_tests.rs
 - codex-rs/core/tests/full_text_terminals.rs

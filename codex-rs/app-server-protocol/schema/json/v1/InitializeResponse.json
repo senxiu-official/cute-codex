@@ -68,6 +68,15 @@
       "description": "Every opened public text item receives a full terminal snapshot, including cancellation, upstream failure and early EOF, retained in thread history.",
       "type": "boolean"
     },
+    "ownerInputCarries": {
+      "description": "Atomic owner input + canonical ExternalInput envelopes on turn/start and turn/steer.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "platformFamily": {
       "description": "Platform family for the running app-server target, for example `\"unix\"` or `\"windows\"`.",
       "type": "string"
@@ -78,6 +87,15 @@
     },
     "presentationVersion": {
       "description": "Durable display-only append/status and timeline support on the bound receiver.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "toolGateVersion": {
+      "description": "cutex fork: `thread/toolGate/set` and `thread/toolGate/changed` on the bound receiver (agent pause at the next tool boundary). Absent on older servers.",
       "format": "uint32",
       "minimum": 0.0,
       "type": [

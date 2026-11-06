@@ -3528,6 +3528,15 @@
           "description": "Every opened public text item receives a full terminal snapshot, including cancellation, upstream failure and early EOF, retained in thread history.",
           "type": "boolean"
         },
+        "ownerInputCarries": {
+          "description": "Atomic owner input + canonical ExternalInput envelopes on turn/start and turn/steer.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "platformFamily": {
           "description": "Platform family for the running app-server target, for example `\"unix\"` or `\"windows\"`.",
           "type": "string"
@@ -3538,6 +3547,15 @@
         },
         "presentationVersion": {
           "description": "Durable display-only append/status and timeline support on the bound receiver.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "toolGateVersion": {
+          "description": "cutex fork: `thread/toolGate/set` and `thread/toolGate/changed` on the bound receiver (agent pause at the next tool boundary). Absent on older servers.",
           "format": "uint32",
           "minimum": 0.0,
           "type": [
@@ -5047,6 +5065,26 @@
             "params"
           ],
           "title": "Thread/externalInput/statusChangedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "thread/toolGate/changed"
+              ],
+              "title": "Thread/toolGate/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ToolGateChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/toolGate/changedNotification",
           "type": "object"
         },
         {
@@ -12007,6 +12045,52 @@
           "retryable_error"
         ],
         "type": "string"
+      },
+      "ExternalInputEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "$ref": "#/definitions/v2/ExternalInputMessage"
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "runtimeGeneration": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "semanticSha256": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ExternalInputView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "message",
+          "ownerId",
+          "runtimeGeneration",
+          "semanticSha256",
+          "threadId",
+          "version"
+        ],
+        "type": "object"
       },
       "ExternalInputHoldReason": {
         "enum": [
@@ -26608,6 +26692,62 @@
           }
         ]
       },
+      "ToolGateChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "description": "Sent whenever the gate or its waiting calls change.",
+        "properties": {
+          "held": {
+            "type": "boolean"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "waiting": {
+            "items": {
+              "$ref": "#/definitions/v2/ToolGateHeldCall"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "held",
+          "threadId",
+          "waiting"
+        ],
+        "title": "ToolGateChangedNotification",
+        "type": "object"
+      },
+      "ToolGateHeldCall": {
+        "additionalProperties": false,
+        "properties": {
+          "callId": {
+            "type": "string"
+          },
+          "sinceMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "threadId": {
+            "description": "The thread the call belongs to: the bound thread or one of its sub-agent threads (they wait on the root's gate).",
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "callId",
+          "sinceMs",
+          "threadId",
+          "tool",
+          "turnId"
+        ],
+        "type": "object"
+      },
       "ToolsV2": {
         "properties": {
           "web_search": {
@@ -26996,6 +27136,16 @@
           "outputSchema": {
             "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
           },
+          "ownerCarries": {
+            "description": "Canonical external items consumed only with this owner input. Never pre-submit these.",
+            "items": {
+              "$ref": "#/definitions/v2/ExternalInputEnvelope"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "parentTurnId": {
             "description": "ID of the turn that caused this new turn to start.\n\nSet this when starting work on behalf of another turn, such as delegated work in a different thread. Leave unset for work started directly by the user. Ignored when this request adds input to an active turn.",
             "type": [
@@ -27142,6 +27292,16 @@
               "$ref": "#/definitions/v2/UserInput"
             },
             "type": "array"
+          },
+          "ownerCarries": {
+            "description": "Canonical external items consumed only with this owner input. Never pre-submit these.",
+            "items": {
+              "$ref": "#/definitions/v2/ExternalInputEnvelope"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"

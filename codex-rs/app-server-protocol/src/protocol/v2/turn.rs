@@ -176,6 +176,10 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
+    /// Canonical external items consumed only with this owner input. Never pre-submit these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub owner_carries: Option<Vec<codex_protocol::external_input::Envelope>>,
     /// Optional source classification for the caller that starts this turn.
     /// Ignored when this request steers an already-active turn.
     #[ts(optional = nullable)]
@@ -319,6 +323,10 @@ pub struct TurnSteerParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
+    /// Canonical external items consumed only with this owner input. Never pre-submit these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub owner_carries: Option<Vec<codex_protocol::external_input::Envelope>>,
     /// Optional metadata to enrich Codex's ResponsesAPI turn metadata.
     /// Replaces unprotected client-provided entries when supplied; an empty map clears them.
     ///

@@ -991,6 +991,11 @@ pub(crate) async fn run_hooks_and_record_inputs(
     for input_item in input {
         let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
         if hook_outcome.should_stop {
+            if let TurnInput::UserInput { metadata, .. } = input_item
+                && let Some(carries) = metadata.owner_carries.as_ref()
+            {
+                sess.discard_owner_carries(carries).await;
+            }
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
@@ -1005,6 +1010,10 @@ pub(crate) async fn run_hooks_and_record_inputs(
             } else {
                 persist_context
             };
+            let carries = match input_item {
+                TurnInput::UserInput { metadata, .. } => metadata.owner_carries.clone(),
+                _ => None,
+            };
             record_pending_input(
                 sess,
                 turn_context,
@@ -1014,6 +1023,16 @@ pub(crate) async fn run_hooks_and_record_inputs(
                 input_persist_context,
             )
             .await;
+            if let Some(carries) = carries
+                && let Err(error) = sess.consume_owner_carries(turn_context, &carries).await
+            {
+                // No subsequent sampling after an uncertain owner/carrier write.
+                if let Some(runtime) = sess.external_input.lock().await.as_mut() {
+                    runtime.poisoned = true;
+                }
+                tracing::error!(%error, "ownerCarries boundary failed; recovery required");
+                return true;
+            }
         }
     }
     blocked_input && !accepted_user_input

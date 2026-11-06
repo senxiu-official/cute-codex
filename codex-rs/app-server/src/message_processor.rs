@@ -382,11 +382,10 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
-                Some({
-                    let time_provider =
-                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
-                    time_provider
-                }),
+                Some(app_server_time_provider(
+                    outgoing.clone(),
+                    thread_state_manager.clone(),
+                )),
             );
             let manager = match external_input_binding.as_ref() {
                 Some(binding) => manager.with_external_input_owner(
@@ -1455,6 +1454,11 @@ impl MessageProcessor {
                 .retry(params)
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::ThreadToolGateSet { params, .. } => self
+                .external_input_processor
+                .set_tool_gate(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadExternalInputResume { params, .. } => self
                 .external_input_processor
                 .resume(params)
@@ -1756,6 +1760,12 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::TurnStart { params, .. } => {
+                self.external_input_processor
+                    .validate_owner_carries(
+                        &params.thread_id,
+                        params.owner_carries.as_deref().unwrap_or_default(),
+                    )
+                    .await?;
                 self.turn_processor
                     .turn_start(
                         request_id.clone(),
@@ -1771,6 +1781,12 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::TurnSteer { params, .. } => {
+                self.external_input_processor
+                    .validate_owner_carries(
+                        &params.thread_id,
+                        params.owner_carries.as_deref().unwrap_or_default(),
+                    )
+                    .await?;
                 self.turn_processor.turn_steer(&request_id, params).await
             }
             ClientRequest::TurnSettingsUpdate { params, .. } => {

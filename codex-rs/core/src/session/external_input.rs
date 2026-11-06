@@ -31,6 +31,10 @@ impl Session {
         let state = self.external_input.lock().await;
         if let Some(runtime) = state.as_ref() {
             ensure!(
+                !runtime.poisoned,
+                "external input recovery required before sampling"
+            );
+            ensure!(
                 runtime.policy_blocked.is_empty(),
                 "receiver canonical byte policy blocks restored history; adjust trusted launch policy and restart"
             );
@@ -173,6 +177,7 @@ impl Session {
             owner: owner.to_owned(),
             recovery: restored.recovery,
             pending: Vec::new(),
+            owner_carries: BTreeMap::new(),
             paused: restored.paused,
             poisoned: false,
             retries,
@@ -301,8 +306,7 @@ impl Session {
             "receiver canonical byte policy blocks restored history; adjust trusted launch policy and restart"
         );
         let soon_boundary = self.external_input_soon_boundary(turn, boundary).await;
-        let live = self
-            .services
+        self.services
             .live_thread
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("external input writer unavailable"))?;
@@ -363,101 +367,243 @@ impl Session {
                 continue;
             }
             let envelope = pending.envelope.clone();
-            let item = ExternalInputContext::new(&envelope, runtime.policy)?.into_response_item();
-            let next_ordinal = runtime
-                .recovery
-                .next_ordinal
-                .checked_add(1)
-                .ok_or_else(|| anyhow::anyhow!("external input receipt ordinal exhausted"))?;
-            let receipt = Receipt::new(
-                &envelope,
-                turn.sub_id.clone(),
-                runtime.recovery.next_ordinal,
-            )?;
-            let view = envelope.view.clone();
-            let commit = Commit { envelope, receipt };
-            let record = Record {
-                version: 1,
-                owner_id: runtime.owner.clone(),
-                thread_id: self.thread_id.to_string(),
-                fact: Fact::Commit {
-                    commit: Box::new(commit.clone()),
-                },
-            };
-            runtime.poisoned = true;
-            #[cfg(all(debug_assertions, unix))]
-            crate::external_input::probe::barrier(live, "before_pair", &commit.envelope.message.id)
+            self.persist_external_input_pair(runtime, turn, envelope)
                 .await?;
-            live.append_items(&[
-                RolloutItem::ExternalInput(record),
-                RolloutItem::ResponseItem(item.clone().into()),
-            ])
-            .await?;
-            live.flush().await?;
-            live.persist_for_read().await?;
-            #[cfg(all(debug_assertions, unix))]
-            crate::external_input::probe::barrier(live, "after_flush", &commit.envelope.message.id)
-                .await?;
-            // Preserve upstream external-context memory policy without replacing
-            // the authoritative pair barrier with a best-effort history write.
-            mark_thread_memory_mode_polluted_if_external_context(self, turn, &item).await;
-            self.state.lock().await.history.record_items(
-                std::iter::once(&item),
-                TruncationPolicy::Bytes(serde_json::to_vec(&item)?.len()),
-            );
-            runtime.recovery.next_ordinal = next_ordinal;
-            let processing = if commit.envelope.message.delivery.is_active() {
-                Processing::Pending(None)
-            } else {
-                Processing::None
-            };
-            runtime.recovery.messages.insert(
-                commit.envelope.message.id.clone(),
-                Recovered { commit, processing },
-            );
-            let _ = runtime
-                .changed
-                .send(runtime.pending[index].envelope.message.id.clone());
             runtime.pending.remove(index);
-            runtime.poisoned = false;
-            // The canonical pair already owns persistence. Publish the existing UI item only
-            // after its original A4 barrier, without appending a second durable record.
-            if let codex_protocol::models::ResponseItem::FunctionCallOutput {
-                id: Some(id),
-                name: Some(name),
-                namespace,
-                output,
-                ..
-            } = &item
-            {
-                self.send_event_raw_with_persistence(
-                    codex_protocol::protocol::Event {
-                        id: turn.sub_id.clone(),
-                        msg: codex_protocol::protocol::EventMsg::ItemCompleted(
-                            codex_protocol::protocol::ItemCompletedEvent {
-                                thread_id: self.thread_id,
-                                turn_id: turn.sub_id.clone(),
-                                item: codex_protocol::items::TurnItem::FunctionCallOutput(
-                                    codex_protocol::items::FunctionCallOutputItem {
-                                        id: id.to_string(),
-                                        name: name.clone(),
-                                        namespace: namespace.clone(),
-                                        output: output.body.clone(),
-                                        external_input_view: view,
-                                    },
-                                ),
-                                started_at_ms: None,
-                                completed_at_ms: chrono::Utc::now().timestamp_millis(),
-                            },
-                        ),
-                    },
-                    /*persist*/ false,
-                )
-                .await;
-            }
-            self.send_raw_response_items(turn, std::slice::from_ref(&item))
-                .await;
         }
+        Ok(())
+    }
+    /// Reserve identities without admitting them to any tool/automatic boundary.
+    /// The only strong reference travels with the owner input; rejection and
+    /// cancellation release it automatically. Status remains receipt-free.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "identity reservation must be atomic"
+    )]
+    pub(crate) async fn reserve_owner_carries(
+        &self,
+        envelopes: Vec<Envelope>,
+    ) -> Result<Arc<Vec<Envelope>>> {
+        ensure!(
+            !envelopes.is_empty() && envelopes.len() <= 100,
+            "ownerCarries requires 1..100 envelopes"
+        );
+        let mut state = self.external_input.lock().await;
+        let runtime = state
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("external input disabled"))?;
+        ensure!(
+            !runtime.poisoned && runtime.policy_blocked.is_empty(),
+            "external input recovery required"
+        );
+        runtime
+            .owner_carries
+            .retain(|_, entry| entry.strong_count() > 0);
+        ensure!(
+            runtime.admission_load() + envelopes.len() <= 100,
+            "external input overloaded"
+        );
+        let mut ids = std::collections::BTreeSet::new();
+        for envelope in &envelopes {
+            envelope.validate()?;
+            ensure!(
+                envelope.thread_id == self.thread_id.to_string()
+                    && envelope.owner_id == runtime.owner,
+                "external input owner/thread mismatch"
+            );
+            ExternalInputContext::new(envelope, runtime.policy)?;
+            ensure!(
+                ids.insert(envelope.message.id.clone()),
+                "duplicate ownerCarries identity"
+            );
+            ensure!(
+                snapshot(runtime, &envelope.message.id, &envelope.semantic_sha256).delivery_state
+                    == DeliveryState::Unknown,
+                "ownerCarries identity already admitted or committed; query externalInput/status before replay"
+            );
+        }
+        let reservation = Arc::new(envelopes);
+        for envelope in reservation.iter() {
+            runtime
+                .owner_carries
+                .insert(envelope.message.id.clone(), Arc::downgrade(&reservation));
+        }
+        Ok(reservation)
+    }
+
+    /// A rejected owner hook can share a drain with accepted input. Release its
+    /// reservation immediately even while the surrounding input batch stays alive.
+    pub(crate) async fn discard_owner_carries(&self, carries: &Arc<Vec<Envelope>>) {
+        let mut state = self.external_input.lock().await;
+        if let Some(runtime) = state.as_mut() {
+            for envelope in carries.iter() {
+                if runtime
+                    .owner_carries
+                    .get(&envelope.message.id)
+                    .and_then(std::sync::Weak::upgrade)
+                    .is_some_and(|reserved| Arc::ptr_eq(&reserved, carries))
+                {
+                    runtime.owner_carries.remove(&envelope.message.id);
+                    let _ = runtime.changed.send(envelope.message.id.clone());
+                }
+            }
+        }
+    }
+
+    /// Called immediately after this input's owner message has been recorded,
+    /// and only after its user-prompt hook accepted it. Delivery mode does not
+    /// reschedule a carrier: this explicit owner boundary owns its consumption.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "durable pair and publication must serialize with status"
+    )]
+    pub(crate) async fn consume_owner_carries(
+        &self,
+        turn: &TurnContext,
+        carries: &Arc<Vec<Envelope>>,
+    ) -> Result<()> {
+        let mut state = self.external_input.lock().await;
+        let runtime = state
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("external input disabled"))?;
+        ensure!(
+            !runtime.poisoned && runtime.policy_blocked.is_empty(),
+            "external input recovery required"
+        );
+        for envelope in carries.iter() {
+            ensure!(
+                runtime
+                    .owner_carries
+                    .get(&envelope.message.id)
+                    .and_then(std::sync::Weak::upgrade)
+                    .is_some_and(|reserved| Arc::ptr_eq(&reserved, carries)),
+                "ownerCarries reservation lost"
+            );
+            ensure!(
+                !runtime.recovery.messages.contains_key(&envelope.message.id),
+                "ownerCarries already committed"
+            );
+            ExternalInputContext::new(envelope, runtime.policy)?;
+        }
+        // Flush the preceding owner record before publishing any carrier receipt.
+        let live = self
+            .services
+            .live_thread
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("external input writer unavailable"))?;
+        live.flush().await?;
+        live.persist_for_read().await?;
+        for envelope in carries.iter() {
+            self.persist_external_input_pair(runtime, turn, envelope.clone())
+                .await?;
+            runtime.owner_carries.remove(&envelope.message.id);
+        }
+        Ok(())
+    }
+
+    async fn persist_external_input_pair(
+        &self,
+        runtime: &mut Runtime,
+        turn: &TurnContext,
+        envelope: Envelope,
+    ) -> Result<()> {
+        let live = self
+            .services
+            .live_thread
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("external input writer unavailable"))?;
+        let item = ExternalInputContext::new(&envelope, runtime.policy)?.into_response_item();
+        let next_ordinal = runtime
+            .recovery
+            .next_ordinal
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("external input receipt ordinal exhausted"))?;
+        let receipt = Receipt::new(
+            &envelope,
+            turn.sub_id.clone(),
+            runtime.recovery.next_ordinal,
+        )?;
+        let view = envelope.view.clone();
+        let commit = Commit { envelope, receipt };
+        let message_id = commit.envelope.message.id.clone();
+        let record = Record {
+            version: 1,
+            owner_id: runtime.owner.clone(),
+            thread_id: self.thread_id.to_string(),
+            fact: Fact::Commit {
+                commit: Box::new(commit.clone()),
+            },
+        };
+        runtime.poisoned = true;
+        #[cfg(all(debug_assertions, unix))]
+        crate::external_input::probe::barrier(live, "before_pair", &commit.envelope.message.id)
+            .await?;
+        live.append_items(&[
+            RolloutItem::ExternalInput(record),
+            RolloutItem::ResponseItem(item.clone().into()),
+        ])
+        .await?;
+        live.flush().await?;
+        live.persist_for_read().await?;
+        #[cfg(all(debug_assertions, unix))]
+        crate::external_input::probe::barrier(live, "after_flush", &commit.envelope.message.id)
+            .await?;
+        // Preserve upstream external-context memory policy without replacing
+        // the authoritative pair barrier with a best-effort history write.
+        mark_thread_memory_mode_polluted_if_external_context(self, turn, &item).await;
+        self.state.lock().await.history.record_items(
+            std::iter::once(&item),
+            TruncationPolicy::Bytes(serde_json::to_vec(&item)?.len()),
+        );
+        runtime.recovery.next_ordinal = next_ordinal;
+        let processing = if commit.envelope.message.delivery.is_active() {
+            Processing::Pending(None)
+        } else {
+            Processing::None
+        };
+        runtime.recovery.messages.insert(
+            commit.envelope.message.id.clone(),
+            Recovered { commit, processing },
+        );
+        // The canonical pair already owns persistence. Publish the existing UI item only
+        // after its original A4 barrier, without appending a second durable record.
+        if let codex_protocol::models::ResponseItem::FunctionCallOutput {
+            id: Some(id),
+            name: Some(name),
+            namespace,
+            output,
+            ..
+        } = &item
+        {
+            self.send_event_raw_with_persistence(
+                codex_protocol::protocol::Event {
+                    id: turn.sub_id.clone(),
+                    msg: codex_protocol::protocol::EventMsg::ItemCompleted(
+                        codex_protocol::protocol::ItemCompletedEvent {
+                            thread_id: self.thread_id,
+                            turn_id: turn.sub_id.clone(),
+                            item: codex_protocol::items::TurnItem::FunctionCallOutput(
+                                codex_protocol::items::FunctionCallOutputItem {
+                                    id: id.to_string(),
+                                    name: name.clone(),
+                                    namespace: namespace.clone(),
+                                    output: output.body.clone(),
+                                    external_input_view: view,
+                                },
+                            ),
+                            started_at_ms: None,
+                            completed_at_ms: chrono::Utc::now().timestamp_millis(),
+                        },
+                    ),
+                },
+                /*persist*/ false,
+            )
+            .await;
+        }
+        self.send_raw_response_items(turn, std::slice::from_ref(&item))
+            .await;
+        runtime.poisoned = false;
+        let _ = runtime.changed.send(message_id);
         Ok(())
     }
 }
@@ -511,6 +657,19 @@ pub(super) fn snapshot(runtime: &Runtime, id: &str, digest: &str) -> Status {
                 (&Processing::Pending(None)).into()
             };
         }
+    }
+    if status.delivery_state == DeliveryState::Unknown
+        && let Some(reserved) = runtime
+            .owner_carries
+            .get(id)
+            .and_then(std::sync::Weak::upgrade)
+        && let Some(envelope) = reserved.iter().find(|envelope| envelope.message.id == id)
+    {
+        status.delivery_state = if envelope.semantic_sha256 == digest {
+            DeliveryState::Pending
+        } else {
+            DeliveryState::Conflict
+        };
     }
     status
 }

@@ -6746,6 +6746,60 @@
       ],
       "type": "object"
     },
+    "ToolGateChangedNotification": {
+      "additionalProperties": false,
+      "description": "Sent whenever the gate or its waiting calls change.",
+      "properties": {
+        "held": {
+          "type": "boolean"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "waiting": {
+          "items": {
+            "$ref": "#/definitions/ToolGateHeldCall"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "held",
+        "threadId",
+        "waiting"
+      ],
+      "type": "object"
+    },
+    "ToolGateHeldCall": {
+      "additionalProperties": false,
+      "properties": {
+        "callId": {
+          "type": "string"
+        },
+        "sinceMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "threadId": {
+          "description": "The thread the call belongs to: the bound thread or one of its sub-agent threads (they wait on the root's gate).",
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "callId",
+        "sinceMs",
+        "threadId",
+        "tool",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "Turn": {
       "properties": {
         "completedAt": {
@@ -7731,6 +7785,26 @@
         "params"
       ],
       "title": "Thread/externalInput/statusChangedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/toolGate/changed"
+          ],
+          "title": "Thread/toolGate/changedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ToolGateChangedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/toolGate/changedNotification",
       "type": "object"
     },
     {

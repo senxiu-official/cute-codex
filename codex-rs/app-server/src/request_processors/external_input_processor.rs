@@ -15,6 +15,10 @@ use codex_app_server_protocol::ExternalInputStatusParams;
 use codex_app_server_protocol::ExternalInputSubmitParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ToolGateChangedNotification;
+use codex_app_server_protocol::ToolGateHeldCall;
+use codex_app_server_protocol::ToolGateSetParams;
+use codex_app_server_protocol::ToolGateSetResponse;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
@@ -30,6 +34,21 @@ pub(crate) struct ExternalInputRequestProcessor {
     threads: Arc<ThreadManager>,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     listener: Mutex<Option<(Weak<CodexThread>, tokio::task::JoinHandle<()>)>>,
+    tool_gate_listener: Mutex<Option<(Weak<CodexThread>, tokio::task::JoinHandle<()>)>>,
+}
+
+fn tool_gate_waiting(state: codex_core::ToolGateState) -> Vec<ToolGateHeldCall> {
+    state
+        .waiting
+        .into_iter()
+        .map(|call| ToolGateHeldCall {
+            call_id: call.call_id,
+            tool: call.tool,
+            turn_id: call.turn_id,
+            thread_id: call.thread_id,
+            since_ms: call.since_ms,
+        })
+        .collect()
 }
 
 impl ExternalInputRequestProcessor {
@@ -43,6 +62,7 @@ impl ExternalInputRequestProcessor {
             threads,
             outgoing,
             listener: Mutex::new(None),
+            tool_gate_listener: Mutex::new(None),
         }
     }
 
@@ -127,6 +147,37 @@ impl ExternalInputRequestProcessor {
         Ok(())
     }
 
+    pub(crate) async fn validate_owner_carries(
+        &self,
+        thread_id: &str,
+        envelopes: &[Envelope],
+    ) -> Result<(), JSONRPCErrorError> {
+        if envelopes.len() > 100 {
+            return Err(invalid_request(
+                "ownerCarries accepts at most 100 envelopes",
+            ));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for envelope in envelopes {
+            validate_owner_carry(self.binding.as_ref(), envelope)?;
+            if envelope.thread_id != thread_id || !ids.insert(&envelope.message.id) {
+                return Err(invalid_request(
+                    "ownerCarries thread mismatch or duplicate identity",
+                ));
+            }
+            // Control binding uses v1; envelope.validate checks the independent
+            // envelope version and digest (including v2 structured views).
+            self.require_thread(
+                1,
+                &envelope.owner_id,
+                &envelope.thread_id,
+                envelope.runtime_generation,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn submit(
         &self,
         params: ExternalInputSubmitParams,
@@ -173,6 +224,65 @@ impl ExternalInputRequestProcessor {
             statuses: vec![status],
             turn_id,
         })
+    }
+
+    /// cutex fork: `thread/toolGate/set` (agent pause at the tool boundary).
+    pub(crate) async fn set_tool_gate(
+        &self,
+        params: ToolGateSetParams,
+    ) -> Result<ToolGateSetResponse, JSONRPCErrorError> {
+        let thread = self
+            .require_thread(
+                params.version,
+                &params.owner_id,
+                &params.thread_id,
+                params.runtime_generation,
+            )
+            .await?;
+        self.listen_tool_gate(&thread, &params.thread_id).await;
+        let state = thread.set_tool_gate(params.held);
+        Ok(ToolGateSetResponse {
+            thread_id: params.thread_id,
+            held: state.held,
+            waiting: tool_gate_waiting(state),
+        })
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "only one tool gate subscription may be installed for the loaded thread"
+    )]
+    async fn listen_tool_gate(&self, thread: &Arc<CodexThread>, thread_id: &str) {
+        let mut listener = self.tool_gate_listener.lock().await;
+        let weak = Arc::downgrade(thread);
+        if listener
+            .as_ref()
+            .is_some_and(|(previous, task)| previous.ptr_eq(&weak) && !task.is_finished())
+        {
+            return;
+        }
+        if let Some((_, task)) = listener.take() {
+            task.abort();
+        }
+        let mut changes = thread.subscribe_tool_gate();
+        changes.mark_unchanged();
+        let outgoing = Arc::clone(&self.outgoing);
+        let thread_id = thread_id.to_string();
+        let task = tokio::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let state = changes.borrow_and_update().clone();
+                outgoing
+                    .send_server_notification(ServerNotification::ThreadToolGateChanged(
+                        ToolGateChangedNotification {
+                            thread_id: thread_id.clone(),
+                            held: state.held,
+                            waiting: tool_gate_waiting(state),
+                        },
+                    ))
+                    .await;
+            }
+        });
+        *listener = Some((weak, task));
     }
 
     pub(crate) async fn resume(
@@ -296,6 +406,31 @@ impl ExternalInputRequestProcessor {
     }
 }
 
+fn validate_owner_carry(
+    binding: Option<&ExternalInputBinding>,
+    envelope: &Envelope,
+) -> Result<(), JSONRPCErrorError> {
+    envelope
+        .validate()
+        .map_err(|error| invalid_request(error.to_string()))?;
+    let binding = binding.ok_or_else(|| invalid_request("ExternalInput capability disabled"))?;
+    if binding.version != 1
+        || envelope.owner_id != binding.owner_id
+        || envelope.thread_id != binding.thread_id
+        || envelope.runtime_generation != binding.runtime_generation
+    {
+        return Err(invalid_request("ExternalInput launch binding mismatch"));
+    }
+    let item = envelope
+        .response_item()
+        .map_err(|error| invalid_request(error.to_string()))?;
+    let bytes = serde_json::to_vec(&item).map_err(|error| invalid_request(error.to_string()))?;
+    if !binding.canonical_byte_limit.permits(bytes.len()) {
+        return Err(invalid_request("receiver canonical byte policy exceeded"));
+    }
+    Ok(())
+}
+
 /// `data.externalInputError` value of a refused exclusive admission.
 pub(crate) const EXTERNAL_INPUT_BUSY_ERROR: &str = "busy";
 
@@ -330,6 +465,76 @@ fn validate_key(key: &MessageKey) -> Result<(), JSONRPCErrorError> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn owner_envelope() -> Envelope {
+        use codex_protocol::external_input::Delivery;
+        use codex_protocol::external_input::Message;
+        use codex_protocol::external_input::Source;
+        use codex_protocol::external_input::SourceKind;
+        let mut value = Envelope {
+            version: 1,
+            owner_id: "owner".into(),
+            thread_id: "thread".into(),
+            runtime_generation: 7,
+            message: Message {
+                id: "notice".into(),
+                source: Source {
+                    kind: SourceKind::Service,
+                    id: "alarm".into(),
+                },
+                event_type: "alarm".into(),
+                delivery: Delivery::Soon,
+                text: "notice".into(),
+            },
+            semantic_sha256: String::new(),
+            view: None,
+        };
+        value.semantic_sha256 = value.digest();
+        value
+    }
+
+    #[test]
+    fn owner_carries_validate_trusted_launch_generation_digest_and_canonical_size() {
+        let mut binding = ExternalInputBinding {
+            version: 1,
+            owner_id: "owner".into(),
+            thread_id: "thread".into(),
+            runtime_generation: 7,
+            canonical_byte_limit: Default::default(),
+        };
+        let envelope = owner_envelope();
+        assert!(validate_owner_carry(Some(&binding), &envelope).is_ok());
+        assert!(validate_owner_carry(None, &envelope).is_err());
+        let mut changed = envelope.clone();
+        changed.runtime_generation += 1;
+        // Generation is excluded from the semantic digest but must match launch authority.
+        assert!(changed.validate().is_ok());
+        assert!(validate_owner_carry(Some(&binding), &changed).is_err());
+        changed = envelope.clone();
+        changed.message.text.push('!');
+        assert!(validate_owner_carry(Some(&binding), &changed).is_err());
+        changed = envelope.clone();
+        changed.owner_id = "other-owner".into();
+        changed.semantic_sha256 = changed.digest();
+        assert!(validate_owner_carry(Some(&binding), &changed).is_err());
+        changed = envelope.clone();
+        changed.thread_id = "other-thread".into();
+        changed.semantic_sha256 = changed.digest();
+        assert!(validate_owner_carry(Some(&binding), &changed).is_err());
+        let canonical_size = serde_json::to_vec(&envelope.response_item().unwrap())
+            .unwrap()
+            .len();
+        binding.canonical_byte_limit = codex_core::context::CanonicalBytePolicy::Limit(
+            std::num::NonZeroU32::new(canonical_size as u32).unwrap(),
+        );
+        assert!(validate_owner_carry(Some(&binding), &envelope).is_ok());
+        binding.canonical_byte_limit = codex_core::context::CanonicalBytePolicy::Limit(
+            std::num::NonZeroU32::new(canonical_size as u32 - 1).unwrap(),
+        );
+        assert!(validate_owner_carry(Some(&binding), &envelope).is_err());
+        binding.canonical_byte_limit = codex_core::context::CanonicalBytePolicy::Off;
+        assert!(validate_owner_carry(Some(&binding), &envelope).is_ok());
+    }
 
     #[test]
     fn busy_refusal_is_a_typed_invalid_request() {

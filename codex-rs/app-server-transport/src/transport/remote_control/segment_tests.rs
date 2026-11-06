@@ -142,6 +142,8 @@ fn invalid_response_becomes_remote_control_jsonrpc_error() {
                     presentation_version: None,
                     external_input_deliveries: None,
                     external_input_control_version: None,
+                    owner_input_carries: None,
+                    tool_gate_version: None,
                     user_agent: "codex-test-agent".to_string(),
                     codex_home,
                     platform_family: "unix".to_string(),

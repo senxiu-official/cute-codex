@@ -213,6 +213,12 @@ struct ChatgptAuthState {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
+/// Longest wait for another process sharing the auth file to finish its refresh.
+/// A refresh is one bounded IdP request plus a local write, so this is generous.
+const AUTH_REFRESH_FILE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+const AUTH_REFRESH_FILE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const AUTH_REFRESH_FILE_LOCK_TIMEOUT_MESSAGE: &str =
+    "Timed out waiting for another Codex process to finish refreshing the shared auth file.";
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -2129,6 +2135,19 @@ impl UnauthorizedRecovery {
     }
 }
 
+/// Exclusive advisory lock on `<auth file>.lock`, held across re-read, refresh and
+/// persist so processes sharing one auth file never spend the same refresh token.
+/// Closing the handle releases the lock even if the process dies.
+struct AuthRefreshFileLock {
+    file: std::fs::File,
+}
+
+impl Drop for AuthRefreshFileLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 /// Central manager providing a single source of truth for stored
 /// authentication data. It loads once (or on preference change) and then
 /// hands out cloned `CodexAuth` values so the rest of the program has a
@@ -3172,6 +3191,11 @@ impl AuthManager {
             .as_ref()
             .and_then(CodexAuth::get_account_id);
 
+        // Another process sharing the auth file may be refreshing the same grant. Wait for
+        // it, then re-read: a rotated token on disk is adopted below instead of refreshed.
+        let _refresh_file_lock = self
+            .acquire_refresh_file_lock(auth_before_reload.as_ref())
+            .await?;
         match self
             .reload_if_account_id_matches(expected_account_id.as_deref())
             .await
@@ -3208,7 +3232,127 @@ impl AuthManager {
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
+        let attempted_auth = self.auth_cached();
+        let refresh_file_lock = self
+            .acquire_refresh_file_lock(attempted_auth.as_ref())
+            .await?;
+        // While this process waited, another one may have rotated the grant. Its token is
+        // the only valid one now, so adopt it rather than spending the rotated-out token.
+        if refresh_file_lock.is_some()
+            && let Some(CodexAuth::Chatgpt(chatgpt_auth)) = attempted_auth.as_ref()
+            && let Some(tokens) = chatgpt_auth.current_token_data()
+            && self
+                .adopt_rotated_tokens_from_storage(chatgpt_auth, &tokens)
+                .await
+        {
+            tracing::info!("Skipping token refresh because another process already rotated it.");
+            return Ok(());
+        }
         self.refresh_token_from_authority_impl(reason).await
+    }
+
+    /// Takes the cross-process refresh lock for managed ChatGPT auth backed by a shared
+    /// file store. Keyring, auto, ephemeral and external auth return `None` unchanged.
+    /// Waits at most [`AUTH_REFRESH_FILE_LOCK_TIMEOUT`], then fails transiently.
+    async fn acquire_refresh_file_lock(
+        &self,
+        auth: Option<&CodexAuth>,
+    ) -> Result<Option<AuthRefreshFileLock>, RefreshTokenError> {
+        if self.has_external_auth() {
+            return Ok(None);
+        }
+        let Some(CodexAuth::Chatgpt(chatgpt_auth)) = auth else {
+            return Ok(None);
+        };
+        let Some(opened) = chatgpt_auth.storage().open_refresh_lock() else {
+            return Ok(None);
+        };
+        let file = match opened {
+            Ok(file) => file,
+            Err(error) => {
+                // Keep refresh available where the lock cannot be created (e.g. a read-only
+                // home); the in-process guard and reuse recovery still apply.
+                tracing::warn!(
+                    kind = ?error.kind(),
+                    "Auth refresh lock is unavailable; refreshing without cross-process coordination"
+                );
+                return Ok(None);
+            }
+        };
+        let deadline = Instant::now() + AUTH_REFRESH_FILE_LOCK_TIMEOUT;
+        let mut waited = false;
+        loop {
+            match file.try_lock() {
+                Ok(()) => {
+                    if waited {
+                        tracing::info!(
+                            "Acquired auth refresh lock after waiting for another process"
+                        );
+                    }
+                    return Ok(Some(AuthRefreshFileLock { file }));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(error)) => {
+                    tracing::warn!(
+                        kind = ?error.kind(),
+                        "Auth refresh lock failed; refreshing without cross-process coordination"
+                    );
+                    return Ok(None);
+                }
+            }
+            if Instant::now() >= deadline {
+                tracing::warn!("Timed out waiting for the auth refresh lock");
+                return Err(RefreshTokenError::Transient(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    AUTH_REFRESH_FILE_LOCK_TIMEOUT_MESSAGE,
+                )));
+            }
+            waited = true;
+            tokio::time::sleep(AUTH_REFRESH_FILE_LOCK_POLL_INTERVAL).await;
+        }
+    }
+
+    /// Adopts tokens another process persisted after `rejected` was read, so a lost
+    /// refresh race is not mistaken for a spent login. Returns `true` only if the file now
+    /// holds a different refresh token for the same account and the cache now uses it.
+    async fn adopt_rotated_tokens_from_storage(
+        &self,
+        auth: &ChatgptAuth,
+        rejected: &TokenData,
+    ) -> bool {
+        if self.has_external_auth()
+            || self.auth_credentials_store_mode != AuthCredentialsStoreMode::File
+        {
+            return false;
+        }
+        let stored = match auth.storage().load() {
+            Ok(Some(stored)) if stored.resolved_mode() == AuthMode::Chatgpt => stored.tokens,
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(kind = ?error.kind(), "Failed to re-read auth after refresh race");
+                None
+            }
+        };
+        let Some(stored) = stored else {
+            return false;
+        };
+        let rotated = stored.account_id.is_some()
+            && stored.account_id == rejected.account_id
+            && stored.id_token.chatgpt_user_id == rejected.id_token.chatgpt_user_id
+            && !stored.refresh_token.is_empty()
+            && stored.refresh_token != rejected.refresh_token;
+        if !rotated {
+            return false;
+        }
+        self.reload_if_account_id_matches(rejected.account_id.as_deref())
+            .await;
+        self.auth_cached()
+            .and_then(|current| current.get_current_token_data())
+            .is_some_and(|current| {
+                current.account_id == rejected.account_id
+                    && !current.refresh_token.is_empty()
+                    && current.refresh_token != rejected.refresh_token
+            })
     }
 
     async fn refresh_token_from_authority_impl(
@@ -3236,12 +3380,26 @@ impl AuthManager {
                             "Token data is not available.",
                         ))
                     })?;
-                    Box::pin(self.refresh_and_persist_chatgpt_token(
+                    let result = Box::pin(self.refresh_and_persist_chatgpt_token(
                         chatgpt_auth,
-                        token_data,
+                        token_data.clone(),
                         reason,
                     ))
-                    .await
+                    .await;
+                    // `refresh_token_reused` also means another process sharing the auth
+                    // file won the race. Only a still-current rejected token is spent.
+                    if let Err(RefreshTokenError::Permanent(error)) = &result
+                        && error.reason == RefreshTokenFailedReason::Exhausted
+                        && self
+                            .adopt_rotated_tokens_from_storage(chatgpt_auth, &token_data)
+                            .await
+                    {
+                        tracing::info!(
+                            "Recovered from refresh token reuse by adopting tokens rotated by another process."
+                        );
+                        return Ok(());
+                    }
+                    result
                 }
                 Some(
                     CodexAuth::ApiKey(_)

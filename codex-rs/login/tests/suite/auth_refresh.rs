@@ -38,6 +38,7 @@ use std::time::Duration as StdDuration;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
@@ -50,6 +51,12 @@ const SYSTEM_PROXY_TEST_SUBPROCESS_ENV_VAR: &str = "CODEX_AUTH_SYSTEM_PROXY_TEST
 const SYSTEM_PROXY_TEST_PROXY_URL_ENV_VAR: &str = "CODEX_AUTH_SYSTEM_PROXY_TEST_PROXY_URL";
 const SYSTEM_PROXY_TEST_NAME: &str =
     "suite::auth_refresh::refresh_token_honors_respect_system_proxy";
+const SHARED_FILE_TEST_SUBPROCESS_ENV_VAR: &str = "CODEX_AUTH_SHARED_FILE_TEST_SUBPROCESS";
+const SHARED_FILE_TEST_CODEX_HOME_ENV_VAR: &str = "CODEX_AUTH_SHARED_FILE_TEST_CODEX_HOME";
+const SHARED_FILE_TEST_NAME: &str =
+    "suite::auth_refresh::processes_sharing_auth_file_spend_refresh_token_once";
+const ROTATED_ACCESS_TOKEN: &str = "rotated-access-token";
+const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
 const PROXY_ENV_KEYS: [&str; 8] = [
     "HTTP_PROXY",
     "http_proxy",
@@ -1860,6 +1867,437 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
     let requests = server.received_requests().await.unwrap_or_default();
     assert!(requests.is_empty(), "expected no refresh token requests");
 
+    Ok(())
+}
+
+/// Two managers on one auth file (as two app-server processes are) must not both
+/// spend the single-use refresh token: the second waits on the file lock and adopts
+/// the rotated token from disk.
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn managers_sharing_auth_file_refresh_concurrently_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({ "refresh_token": INITIAL_REFRESH_TOKEN }),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(StdDuration::from_millis(500))
+                .set_body_json(json!({
+                    "access_token": ROTATED_ACCESS_TOKEN,
+                    "refresh_token": ROTATED_REFRESH_TOKEN
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&chatgpt_auth_dot_json(
+        initial_tokens.clone(),
+        Utc::now() - Duration::days(1),
+    ))
+    .await?;
+    let other = shared_file_manager(ctx.codex_home.path()).await;
+    other.reload().await;
+
+    let first_manager = Arc::clone(&ctx.auth_manager);
+    let first = tokio::spawn(async move { first_manager.refresh_token().await });
+    wait_for_requests(&server, /*count*/ 1).await?;
+    // The first refresh now holds the file lock while its IdP request is in flight.
+    let second = other.refresh_token().await;
+    first.await?.context("first refresh should succeed")?;
+    second.context("second refresh should adopt the rotated token")?;
+
+    let rotated_tokens = TokenData {
+        access_token: ROTATED_ACCESS_TOKEN.to_string(),
+        refresh_token: ROTATED_REFRESH_TOKEN.to_string(),
+        ..initial_tokens
+    };
+    for manager in [&ctx.auth_manager, &other] {
+        let auth = manager.auth_cached().context("auth should be cached")?;
+        assert_eq!(auth.get_token_data()?, rotated_tokens);
+        assert!(manager.refresh_failure_for_auth(&auth).is_none());
+    }
+    let stored = ctx.load_auth()?;
+    assert_eq!(stored.tokens, Some(rotated_tokens));
+    assert_refresh_lock_file_is_empty(ctx.codex_home.path())?;
+
+    server.verify().await;
+    Ok(())
+}
+
+/// The proactive (near-expiry) path is what every turn takes; concurrent managers
+/// sharing the file must also produce exactly one IdP refresh there.
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn managers_sharing_auth_file_proactively_refresh_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let fresh_access_token = access_token_with_expiration(Utc::now() + Duration::hours(1));
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({ "refresh_token": INITIAL_REFRESH_TOKEN }),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(StdDuration::from_millis(500))
+                .set_body_json(json!({
+                    "access_token": fresh_access_token,
+                    "refresh_token": ROTATED_REFRESH_TOKEN
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let expiring_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(1));
+    let initial_tokens = build_tokens(&expiring_access_token, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&chatgpt_auth_dot_json(initial_tokens.clone(), Utc::now()))
+        .await?;
+    let other = shared_file_manager(ctx.codex_home.path()).await;
+    other.reload().await;
+
+    let first_manager = Arc::clone(&ctx.auth_manager);
+    let first = tokio::spawn(async move { first_manager.auth().await });
+    wait_for_requests(&server, /*count*/ 1).await?;
+    let second = other.auth().await.context("second auth should exist")?;
+    let first = first.await?.context("first auth should exist")?;
+
+    let rotated_tokens = TokenData {
+        access_token: fresh_access_token,
+        refresh_token: ROTATED_REFRESH_TOKEN.to_string(),
+        ..initial_tokens
+    };
+    assert_eq!(first.get_token_data()?, rotated_tokens);
+    assert_eq!(second.get_token_data()?, rotated_tokens);
+    assert!(other.refresh_failure_for_auth(&second).is_none());
+
+    server.verify().await;
+    Ok(())
+}
+
+/// Same race across real processes: a child test process refreshes while this process
+/// waits on the lock file, then this process adopts the child's rotated token.
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn processes_sharing_auth_file_spend_refresh_token_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    if let Some(codex_home) = std::env::var_os(SHARED_FILE_TEST_CODEX_HOME_ENV_VAR)
+        && std::env::var_os(SHARED_FILE_TEST_SUBPROCESS_ENV_VAR).is_some()
+    {
+        // Child: the refresh endpoint comes from the inherited override variable.
+        let manager = shared_file_manager(std::path::Path::new(&codex_home)).await;
+        manager
+            .refresh_token()
+            .await
+            .context("child refresh should succeed")?;
+        return Ok(());
+    }
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_partial_json(
+            json!({ "refresh_token": INITIAL_REFRESH_TOKEN }),
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(StdDuration::from_millis(1500))
+                .set_body_json(json!({
+                    "access_token": ROTATED_ACCESS_TOKEN,
+                    "refresh_token": ROTATED_REFRESH_TOKEN
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&chatgpt_auth_dot_json(
+        initial_tokens.clone(),
+        Utc::now() - Duration::days(1),
+    ))
+    .await?;
+
+    let mut command = tokio::process::Command::new(std::env::current_exe()?);
+    command
+        .arg("--exact")
+        .arg(SHARED_FILE_TEST_NAME)
+        .env(SHARED_FILE_TEST_SUBPROCESS_ENV_VAR, "1")
+        .env(SHARED_FILE_TEST_CODEX_HOME_ENV_VAR, ctx.codex_home.path())
+        .env(
+            REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/token", server.uri()),
+        )
+        .kill_on_drop(true);
+    let child = command.spawn()?;
+    // The child now holds the lock file while its IdP request is in flight.
+    wait_for_requests(&server, /*count*/ 1).await?;
+    ctx.auth_manager
+        .refresh_token()
+        .await
+        .context("parent refresh should adopt the child's rotated token")?;
+    let output = child.wait_with_output().await?;
+    assert!(
+        output.status.success(),
+        "subprocess test `{SHARED_FILE_TEST_NAME}` failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let rotated_tokens = TokenData {
+        access_token: ROTATED_ACCESS_TOKEN.to_string(),
+        refresh_token: ROTATED_REFRESH_TOKEN.to_string(),
+        ..initial_tokens
+    };
+    let auth = ctx
+        .auth_manager
+        .auth_cached()
+        .context("auth should be cached")?;
+    assert_eq!(auth.get_token_data()?, rotated_tokens);
+    assert_eq!(ctx.load_auth()?.tokens, Some(rotated_tokens));
+    assert_refresh_lock_file_is_empty(ctx.codex_home.path())?;
+
+    server.verify().await;
+    Ok(())
+}
+
+/// A writer outside the lock (e.g. an older binary) may still win the race. When the
+/// IdP then answers `refresh_token_reused` but the file already holds the rotated
+/// token, the manager adopts it instead of latching a permanent failure.
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn refresh_token_reused_adopts_token_rotated_on_disk() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    ctx.write_auth(&chatgpt_auth_dot_json(
+        initial_tokens.clone(),
+        Utc::now() - Duration::days(1),
+    ))
+    .await?;
+    let rotated_tokens = TokenData {
+        access_token: ROTATED_ACCESS_TOKEN.to_string(),
+        refresh_token: ROTATED_REFRESH_TOKEN.to_string(),
+        ..initial_tokens
+    };
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(PersistThenRejectAsReused {
+            codex_home: ctx.codex_home.path().to_path_buf(),
+            persisted: chatgpt_auth_dot_json(rotated_tokens.clone(), Utc::now()),
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    ctx.auth_manager
+        .refresh_token()
+        .await
+        .context("reuse after a rotation on disk should recover")?;
+
+    let auth = ctx
+        .auth_manager
+        .auth_cached()
+        .context("auth should be cached")?;
+    assert_eq!(auth.get_token_data()?, rotated_tokens);
+    assert!(ctx.auth_manager.refresh_failure_for_auth(&auth).is_none());
+    // No further refresh is needed or attempted for the adopted token.
+    let auth = ctx.auth_manager.auth().await.context("auth should exist")?;
+    assert_eq!(auth.get_token_data()?, rotated_tokens);
+
+    server.verify().await;
+    Ok(())
+}
+
+/// When the file still holds the rejected refresh token, reuse is a real failure.
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn refresh_token_reused_stays_permanent_when_auth_file_not_rotated() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let initial_auth =
+        chatgpt_auth_dot_json(initial_tokens.clone(), Utc::now() - Duration::days(1));
+    ctx.write_auth(&initial_auth).await?;
+    // A concurrent write that keeps the rejected refresh token is not a rotation.
+    let rewritten = chatgpt_auth_dot_json(
+        TokenData {
+            access_token: "rewritten-access-token".to_string(),
+            ..initial_tokens.clone()
+        },
+        Utc::now(),
+    );
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(PersistThenRejectAsReused {
+            codex_home: ctx.codex_home.path().to_path_buf(),
+            persisted: rewritten.clone(),
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let first_err = ctx
+        .auth_manager
+        .refresh_token()
+        .await
+        .err()
+        .context("reuse without a rotation should fail")?;
+    assert_eq!(
+        first_err.failed_reason(),
+        Some(RefreshTokenFailedReason::Exhausted)
+    );
+    let cached = ctx
+        .auth_manager
+        .auth_cached()
+        .context("auth should be cached")?;
+    assert_eq!(cached.get_token_data()?, initial_tokens);
+    assert_eq!(
+        ctx.auth_manager
+            .refresh_failure_for_auth(&cached)
+            .map(|error| error.reason),
+        Some(RefreshTokenFailedReason::Exhausted)
+    );
+    assert_eq!(ctx.load_auth()?, rewritten);
+
+    server.verify().await;
+    Ok(())
+}
+
+/// Unchanged file: the permanent failure is latched and not retried.
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn refresh_token_reused_stays_permanent_when_auth_file_unchanged() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "error": { "code": "refresh_token_reused" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let initial_auth =
+        chatgpt_auth_dot_json(initial_tokens.clone(), Utc::now() - Duration::days(1));
+    ctx.write_auth(&initial_auth).await?;
+
+    for attempt in ["first", "second"] {
+        let err = ctx
+            .auth_manager
+            .refresh_token()
+            .await
+            .err()
+            .with_context(|| format!("{attempt} refresh should fail"))?;
+        assert_eq!(
+            err.failed_reason(),
+            Some(RefreshTokenFailedReason::Exhausted)
+        );
+    }
+    let cached = ctx
+        .auth_manager
+        .auth_cached()
+        .context("auth should be cached")?;
+    assert_eq!(cached.get_token_data()?, initial_tokens);
+    assert!(ctx.auth_manager.refresh_failure_for_auth(&cached).is_some());
+    assert_eq!(ctx.load_auth()?, initial_auth);
+
+    server.verify().await;
+    Ok(())
+}
+
+/// Simulates another process persisting `persisted` while this request is in flight,
+/// then the IdP rejecting this request's (now rotated-out) refresh token.
+struct PersistThenRejectAsReused {
+    codex_home: std::path::PathBuf,
+    persisted: AuthDotJson,
+}
+
+impl Respond for PersistThenRejectAsReused {
+    fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
+        save_auth(
+            &self.codex_home,
+            &self.persisted,
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )
+        .expect("concurrent writer should persist auth");
+        ResponseTemplate::new(401).set_body_json(json!({
+            "error": { "code": "refresh_token_reused" }
+        }))
+    }
+}
+
+async fn shared_file_manager(codex_home: &std::path::Path) -> Arc<AuthManager> {
+    AuthManager::shared(
+        codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
+        /*chatgpt_base_url*/ None,
+        AuthKeyringBackendKind::default(),
+        codex_login::test_support::transport_default_auth_route_config(),
+    )
+    .await
+}
+
+fn chatgpt_auth_dot_json(tokens: TokenData, last_refresh: chrono::DateTime<Utc>) -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(tokens),
+        last_refresh: Some(last_refresh),
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    }
+}
+
+async fn wait_for_requests(server: &MockServer, count: usize) -> Result<()> {
+    let deadline = std::time::Instant::now() + StdDuration::from_secs(30);
+    loop {
+        let received = server.received_requests().await.unwrap_or_default().len();
+        if received >= count {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {count} refresh request(s); saw {received}"
+        );
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+    }
+}
+
+/// The lock file only coordinates; it must never receive credential bytes.
+fn assert_refresh_lock_file_is_empty(codex_home: &std::path::Path) -> Result<()> {
+    let metadata = std::fs::metadata(codex_home.join("auth.json.lock"))
+        .context("refresh lock file should exist after a file-backed refresh")?;
+    assert_eq!(metadata.len(), 0);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    }
     Ok(())
 }
 

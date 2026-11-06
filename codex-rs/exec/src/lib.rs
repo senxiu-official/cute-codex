@@ -1231,6 +1231,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 ClientRequest::TurnStart {
                     request_id: request_ids.next(),
                     params: TurnStartParams {
+                        owner_carries: None,
                         disabled_plugin_ids: None,
                         thread_id: primary_thread_id_for_span.clone(),
                         turn_trigger: Some("exec".to_string()),

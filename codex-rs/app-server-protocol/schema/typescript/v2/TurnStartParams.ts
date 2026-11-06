@@ -7,6 +7,7 @@ import type { ReasoningSummary } from "../ReasoningSummary";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { ExternalInputEnvelope } from "./ExternalInputEnvelope";
 import type { SandboxPolicy } from "./SandboxPolicy";
 import type { TurnToolOutput } from "./TurnToolOutput";
 import type { UserInput } from "./UserInput";
@@ -16,6 +17,9 @@ export type TurnStartParams = {threadId: string, /**
  * Omitted/null preserves the list; [] clears it.
  */
 disabledPluginIds?: Array<string> | null, clientUserMessageId?: string | null, input: Array<UserInput>, /**
+ * Canonical external items consumed only with this owner input. Never pre-submit these.
+ */
+ownerCarries?: Array<ExternalInputEnvelope>, /**
  * Optional source classification for the caller that starts this turn.
  * Ignored when this request steers an already-active turn.
  */

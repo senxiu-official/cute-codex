@@ -247,8 +247,30 @@ pub(super) async fn handle(
             "no eligible external input reservation".into(),
         ));
     }
+    let carries = if request.request.owner_carries.is_empty() {
+        None
+    } else {
+        if !matches!(
+            mode,
+            TurnInputMode::StartOrSteer | TurnInputMode::Steer { .. }
+        ) || !matches!(&request.request.input, SubmittedTurnInput::UserInput { content, .. } if !content.is_empty())
+            || request.request.start_origin() != TurnStartOrigin::Explicit
+        {
+            return Err(CodexErr::InvalidRequest(
+                "ownerCarries requires explicit nonempty owner input".into(),
+            ));
+        }
+        Some(
+            session
+                .reserve_owner_carries(request.request.owner_carries.clone())
+                .await
+                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?,
+        )
+    };
     let result = match mode {
-        TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
+        TurnInputMode::StartOrSteer => {
+            start_or_steer(session, request, submission_id, carries).await
+        }
         TurnInputMode::StartIfIdle => {
             let kind = match &request.request.input {
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
@@ -290,7 +312,7 @@ pub(super) async fn handle(
             .await
         }
         TurnInputMode::Steer { expected_turn_id } => {
-            steer(session, request, expected_turn_id, submission_id).await
+            steer(session, request, expected_turn_id, submission_id, carries).await
         }
     };
     // Link this request's trace to the accepted turn, which may have an older trace.
@@ -343,6 +365,7 @@ async fn start_or_steer(
     session: &Arc<Session>,
     request: WithTurnExtensionData<TurnInputRequest>,
     submission_id: String,
+    carries: Option<Arc<Vec<codex_protocol::external_input::Envelope>>>,
 ) -> CodexResult<TurnInputSubmission> {
     let explicit_origin = request.request.start_origin() == TurnStartOrigin::Explicit;
     let WithTurnExtensionData {
@@ -396,6 +419,7 @@ async fn start_or_steer(
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata.clone(),
             origin,
+            carries.clone(),
         )
         .await
     {
@@ -456,6 +480,9 @@ async fn start_or_steer(
                     )
                     .await,
                 );
+            }
+            if let Some(TurnInput::UserInput { metadata, .. }) = task_input.last_mut() {
+                metadata.owner_carries = carries;
             }
             if is_human {
                 session
@@ -754,6 +781,7 @@ async fn steer(
     request: WithTurnExtensionData<TurnInputRequest>,
     expected_turn_id: String,
     submission_id: String,
+    carries: Option<Arc<Vec<codex_protocol::external_input::Envelope>>>,
 ) -> CodexResult<TurnInputSubmission> {
     let WithTurnExtensionData {
         request,
@@ -791,6 +819,7 @@ async fn steer(
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata,
             origin,
+            carries.clone(),
         )
         .await
     {
@@ -944,6 +973,7 @@ impl Session {
         required_final_output_json_schema: Option<&Value>,
         responsesapi_client_metadata: ResponsesApiClientMetadataUpdate,
         origin: UserInputOrigin,
+        carries: Option<Arc<Vec<codex_protocol::external_input::Envelope>>>,
     ) -> Result<(String, String), NotSubmittedReason> {
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
@@ -1008,6 +1038,7 @@ impl Session {
                     metadata: super::UserInputMetadata {
                         acceptance_order: Some(self.reserve_user_input_order().await),
                         origin,
+                        owner_carries: carries,
                     },
                 }
             }
@@ -1086,6 +1117,7 @@ async fn pending_turn_input(
             metadata: super::UserInputMetadata {
                 acceptance_order: Some(session.reserve_user_input_order().await),
                 origin,
+                ..Default::default()
             },
         },
         SubmittedTurnInput::ResponseItem(item)
@@ -1129,3 +1161,7 @@ async fn pending_turn_input(
     }
     input
 }
+
+#[cfg(test)]
+#[path = "owner_carries_tests.rs"]
+mod owner_carries_tests;

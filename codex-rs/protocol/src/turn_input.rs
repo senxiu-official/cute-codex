@@ -62,6 +62,8 @@ pub struct ResponseItemAnnotations {
 pub struct TurnInputRequest {
     start_origin: TurnStartOrigin,
     pub input: TurnInput,
+    /// Trusted external envelopes bound to this specific owner-input boundary.
+    pub owner_carries: Vec<crate::external_input::Envelope>,
     pub thread_settings: ThreadSettingsOverrides,
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
@@ -120,12 +122,18 @@ impl TurnInputRequest {
         Self {
             start_origin: TurnStartOrigin::Explicit,
             input,
+            owner_carries: Vec::new(),
             thread_settings: ThreadSettingsOverrides::default(),
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),
             responsesapi_client_metadata: ResponsesApiClientMetadataUpdate::default(),
             trace: None,
         }
+    }
+
+    pub fn with_owner_carries(mut self, envelopes: Vec<crate::external_input::Envelope>) -> Self {
+        self.owner_carries = envelopes;
+        self
     }
 
     /// Marks a background native dispatch, never inferred from serialized input.

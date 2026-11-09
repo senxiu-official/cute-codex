@@ -29,8 +29,8 @@
     },
     {
       "path": ".github/workflows/cute-codex-build-binaries.yml",
-      "sha256": "2f4389aeb21bf595cb6d58e4dcee6f20941a846e2a5cc2ca0253d3e68f063b6c",
-      "size": 6125
+      "sha256": "6aa4bb30475a1a56beca6b08510a0c83e9602cf3a76fff82b56ac55fc1b25a56",
+      "size": 6503
     },
     {
       "path": ".github/workflows/sign-release.yml",

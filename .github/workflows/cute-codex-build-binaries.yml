@@ -9,6 +9,12 @@ on:
   push:
     tags: ["cute-codex-v*"]
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Exact public product source to build (empty = dispatched ref)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -46,6 +52,7 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.source_ref || github.ref }}
           persist-credentials: false
       - name: Free disk space, add swap, fewer parallel jobs (Linux)
         # The 16 GB runner ran out of memory and lost contact with GitHub during the release build
@@ -88,9 +95,15 @@ jobs:
       - name: Rust toolchain (native release matrix)
         working-directory: codex-rs
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt --component rust-src && rustc --version
-      - name: Target dir on the system drive (Windows; the workspace drive is smaller)
+      - name: Short Cargo paths and CLI Git on Windows
         if: runner.os == 'Windows'
-        run: echo "CARGO_TARGET_DIR=C:\\cute-codex-target" >> "$GITHUB_ENV"
+        run: |
+          git config --global core.longpaths true
+          {
+            echo "CARGO_TARGET_DIR=C:\\cute-codex-target"
+            echo "CARGO_HOME=C:/c"
+            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true"
+          } >> "$GITHUB_ENV"
       - name: Build and pack
         env:
           LEAK_POLICY: ${{ matrix.leak_policy }}

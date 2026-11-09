@@ -1,6 +1,7 @@
 //! Derived display of complete authoritative pairs; never a new durable event.
 use crate::protocol::thread_history::ThreadHistoryItemChange;
 use crate::protocol::v2::ThreadItem;
+use crate::protocol::v2::ThreadItemPayload;
 use codex_protocol::external_input::Commit;
 use codex_protocol::external_input::Error;
 use codex_protocol::external_input::Receipt;
@@ -61,15 +62,13 @@ impl ExternalInputProjection {
             };
             return Ok(Some(ThreadHistoryItemChange {
                 turn_id: commit.receipt.turn_id,
-                item: ThreadItem::FunctionCallOutput {
+                item: ThreadItem::untimed(ThreadItemPayload::FunctionCallOutput {
                     id: id.to_string(),
                     name: name.clone(),
                     namespace: namespace.clone(),
                     output: output.body.clone(),
                     external_input_view: envelope.view.clone(),
-                },
-                started_at_ms: None,
-                completed_at_ms: None,
+                }),
             }));
         }
         // A standalone generic FCO is not evidence of external admission. Leave it to

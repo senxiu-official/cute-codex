@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use super::footer_content::FooterContent;
 use codex_protocol::ThreadId;
-use ratatui::text::Line;
 
+use super::status_line_content::StatusLineRenderer;
 use super::status_line_setup::StatusLineItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -57,6 +58,8 @@ pub(crate) enum StatusSurfacePreviewItem {
     Model,
     ModelWithReasoning,
     Reasoning,
+    Profile,
+    Provider,
     TaskProgress,
 }
 
@@ -105,13 +108,15 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::ThreadCredits => "5.2 credits",
             StatusSurfacePreviewItem::EstimatedThreadCost => "~$1.82",
             StatusSurfacePreviewItem::SessionId => "550e8400-e29b-41d4",
-            StatusSurfacePreviewItem::FastMode => "Fast on",
+            StatusSurfacePreviewItem::FastMode => "Fast",
             StatusSurfacePreviewItem::Daybreak => "Daybreak off",
             StatusSurfacePreviewItem::RawOutput => "raw output",
             StatusSurfacePreviewItem::WorkspaceHeadline => "Workspace headline",
             StatusSurfacePreviewItem::Model => "gpt-5.2-codex",
             StatusSurfacePreviewItem::ModelWithReasoning => "gpt-5.2-codex medium",
             StatusSurfacePreviewItem::Reasoning => "medium",
+            StatusSurfacePreviewItem::Profile => "profile: <name>",
+            StatusSurfacePreviewItem::Provider => "provider: <id>",
             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
         }
     }
@@ -166,6 +171,8 @@ impl StatusSurfacePreviewItem {
             Self::Model,
             Self::ModelWithReasoning,
             Self::Reasoning,
+            Self::Profile,
+            Self::Provider,
             Self::TaskProgress,
         ]
         .into_iter()
@@ -182,6 +189,8 @@ struct PreviewValue {
 pub(crate) struct StatusSurfacePreviewData {
     pub(crate) notification_style: Option<ratatui::style::Style>,
     pub(crate) thread_id: Option<ThreadId>,
+    pub(crate) renderer: StatusLineRenderer,
+    pub(crate) pull_request_url: Option<String>,
     values: BTreeMap<StatusSurfacePreviewItem, PreviewValue>,
 }
 
@@ -189,6 +198,8 @@ impl Default for StatusSurfacePreviewData {
     fn default() -> Self {
         let mut data = Self {
             thread_id: None,
+            renderer: StatusLineRenderer::Native,
+            pull_request_url: None,
             values: BTreeMap::new(),
             notification_style: None,
         };
@@ -292,7 +303,7 @@ impl StatusSurfacePreviewData {
         &self,
         items: I,
         use_theme_colors: bool,
-    ) -> Vec<Line<'static>>
+    ) -> Vec<FooterContent>
     where
         I: IntoIterator<Item = StatusLineItem>,
     {
@@ -306,30 +317,58 @@ impl StatusSurfacePreviewData {
         &self,
         items: I,
         use_theme_colors: bool,
-    ) -> Option<Line<'static>>
+    ) -> Option<FooterContent>
     where
         I: IntoIterator<Item = StatusLineItem>,
     {
-        let segments = items.into_iter().filter_map(|item| {
-            if let Some(value) = super::status_line_layout::spacing(item) {
-                return Some((item, value));
-            }
-            if crate::custom_status_items::is_custom(item) {
-                return Some((item, crate::custom_status_items::value(item)));
-            }
-            self.value_for(item.preview_item()).map(|value| {
-                (
-                    item,
-                    crate::cutex_status_presentation::text(item, value.to_string()),
-                )
+        let segments: Vec<_> = items
+            .into_iter()
+            .filter_map(|item| {
+                if let Some(value) = super::status_line_layout::spacing(item) {
+                    return Some((item, value));
+                }
+                if crate::custom_status_items::is_custom(item) {
+                    return Some((item, crate::custom_status_items::value(item)));
+                }
+                self.value_for(item.preview_item()).map(|value| {
+                    (
+                        item,
+                        crate::cutex_status_presentation::text(item, value.to_string()),
+                    )
+                })
             })
-        });
+            .collect();
+        if segments.is_empty() {
+            return None;
+        }
+        let pull_request_url = self
+            .live_value_for(StatusSurfacePreviewItem::PullRequestNumber)
+            .and(self.pull_request_url.as_deref());
+        if self.renderer == StatusLineRenderer::Extension {
+            return self.renderer.content(
+                segments,
+                use_theme_colors,
+                self.thread_id,
+                pull_request_url,
+            );
+        }
+        let pull_request_text = segments
+            .iter()
+            .find(|(item, _)| *item == StatusLineItem::PullRequestNumber)
+            .map(|(_, text)| text.clone());
         super::status_line_style::status_line_with_notification_style(
-            segments.collect(),
+            segments,
             use_theme_colors,
             self.notification_style,
             self.thread_id,
         )
+        .map(|line| {
+            FooterContent::HyperlinkLine(super::status_line_style::link_pull_request(
+                line,
+                pull_request_text.as_deref(),
+                pull_request_url,
+            ))
+        })
     }
 }
 

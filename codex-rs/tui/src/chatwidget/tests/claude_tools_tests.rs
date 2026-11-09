@@ -7,7 +7,7 @@ async fn claude_search_renders_live_and_replayed_without_executing_a_tool() {
         let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
         chat.note_rendered_width(80);
         let item = |status| {
-            serde_json::from_value::<ThreadItem>(json!({
+            serde_json::from_value::<codex_app_server_protocol::ThreadItem>(json!({
                 "type":"dynamicToolCall","id":"native-search","namespace":"claude",
                 "tool":"WebSearch","arguments":{"query":"Claude SDK documentation"},
                 "status":status,"contentItems":[],"success":true,"durationMs":100
@@ -15,7 +15,11 @@ async fn claude_search_renders_live_and_replayed_without_executing_a_tool() {
             .unwrap()
         };
         if replay {
-            chat.replay_thread_item(item("completed"), "turn".into(), ReplayKind::ThreadSnapshot);
+            chat.replay_thread_item(
+                item("completed").payload,
+                "turn".into(),
+                ReplayKind::ThreadSnapshot,
+            );
         } else {
             chat.handle_server_notification(
                 ServerNotification::ItemStarted(ItemStartedNotification {

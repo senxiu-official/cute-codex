@@ -16,7 +16,7 @@ is listed in [CUTE-CODEX-CHANGES.md](CUTE-CODEX-CHANGES.md). It is not an offici
   ([AGENT-INSTALL.md](https://github.com/senxiu-official/cutex-desktop/blob/release/docs/install/AGENT-INSTALL.md))
   either unpacks the release binaries (section B) or builds it from the `release` branch (section 3).
 - **Release binaries:** each release carries `native-<version>-linux-x64.tar.gz` and
-  `-windows-x64.tar.gz` (`codex-app-server`, `codex`, `codex-code-mode-host` and the app-server
+  `-windows-x64.tar.gz` (`codex-app-server`, `codex`, `codex-code-mode-host`, `codex-exec-server` and the app-server
   protocol schema), built by GitHub Actions (`.github/workflows/cute-codex-build-binaries.yml`) and
   signed with minisign (`<file>.minisig`; public key
   `RWRH9INhAb2gACJAg/h5EBjbudos2LXj6K+5hRBEGeVLDKaKzE+FICmS`). No macOS build: cutex agents do not

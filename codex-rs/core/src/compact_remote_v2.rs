@@ -848,6 +848,7 @@ mod tests {
         }
         drop(tx_event);
         ResponseStream {
+            routing_affinity: None,
             rx_event,
             interrupt: None,
             consumer_dropped: CancellationToken::new(),
@@ -1359,6 +1360,7 @@ mod tests {
         let stream = response_stream(vec![Err(CodexErr::new(
             CodexErrorDetails::ResponseIncomplete(Box::new(
                 codex_protocol::error::ResponseIncompleteError {
+                    partial_output: vec![],
                     reason: "max_output_tokens".to_string(),
                     response_id: Some("resp-background".to_string()),
                     token_usage: Some(TokenUsage {

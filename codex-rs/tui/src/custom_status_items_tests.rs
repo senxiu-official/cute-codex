@@ -130,8 +130,10 @@ fn status_items_process_renderer() {
             ],
             /*use_theme_colors*/ false,
             /*thread_id*/ None,
+            /*pull_request_url*/ None,
         )
-        .unwrap();
+        .unwrap()
+        .line;
         assert_eq!(
             line.spans[0].style,
             style(StatusLineItem::CustomBonVoyage).unwrap()
@@ -149,7 +151,9 @@ fn status_items_process_renderer() {
                 ],
                 /*use_theme_colors*/ true,
             )
-            .unwrap();
+            .unwrap()
+            .into_hyperlink_line()
+            .line;
         assert_eq!(preview.spans[..3], line.spans[..3]);
         // Render through the same native ratatui width handling as the footer.
         let draw = |width| {

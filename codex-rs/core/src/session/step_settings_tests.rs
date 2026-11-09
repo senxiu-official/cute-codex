@@ -327,7 +327,10 @@ async fn model_variant_cannot_bypass_underlying_review_requirements() {
         ..Default::default()
     };
     let selected = Arc::new(configured_settings());
-    let initial = Arc::new(model_info_from_slug(selected.collaboration_mode.model()));
+    let initial = Arc::new(codex_protocol::openai_models::CatalogModel {
+        model: Arc::new(model_info_from_slug(selected.collaboration_mode.model())),
+        origin: codex_models_manager::ModelOrigin::ExplicitConfig,
+    });
     let mut variant = model_info_from_slug("Protected [285K]");
     variant.request_model = Some("protected-model".to_string());
     let manager = StaticModelsManager::new(
@@ -335,6 +338,7 @@ async fn model_variant_cannot_bypass_underlying_review_requirements() {
         ModelsResponse {
             models: vec![variant],
         },
+        codex_models_manager::ModelOrigin::ExplicitConfig,
     );
     let settings = ResolvedStepSettings::new(
         selected,
@@ -510,7 +514,11 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
     let catalog = ModelsResponse {
         models: vec![model],
     };
-    let models_manager = StaticModelsManager::new(/*auth_manager*/ None, catalog.clone());
+    let models_manager = StaticModelsManager::new(
+        /*auth_manager*/ None,
+        catalog.clone(),
+        codex_models_manager::ModelOrigin::ExplicitConfig,
+    );
 
     let mut config = test_config().await;
     config.model = Some("model-a".to_string());

@@ -1,5 +1,6 @@
 //! Bounded app-server transcript loading for resume, fork, and transcript views.
 
+use codex_app_server_protocol::ThreadItem;
 use std::collections::HashSet;
 
 use super::AppServerSession;
@@ -13,7 +14,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadHistoryMode;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
@@ -148,7 +149,7 @@ impl AppServerSession {
     ) -> std::result::Result<ThreadRevertResponse, codex_app_server_client::TypedRequestError> {
         let request_id = self.next_request_id();
         let response: ThreadRevertResponse = self
-            .client
+            .request_handle
             .request_typed(ClientRequest::ThreadRevert {
                 request_id,
                 params: ThreadRevertParams {
@@ -212,7 +213,7 @@ impl AppServerSession {
         cursor: &str,
         page: ThreadItemsListResponse,
         turns: &mut Vec<Turn>,
-    ) -> Result<Vec<ThreadItem>> {
+    ) -> Result<Vec<ThreadItemPayload>> {
         if !self.is_older_history_page_pending(thread_id, cursor) {
             return Ok(Vec::new());
         }
@@ -235,7 +236,7 @@ impl AppServerSession {
         limit: u32,
     ) -> Result<ThreadItemsListResponse> {
         let request_id = self.next_request_id();
-        self.client
+        self.request_handle
             .request_typed(ClientRequest::ThreadItemsList {
                 request_id,
                 params: thread_items_page_params(thread_id, turn_id, cursor, limit),
@@ -251,7 +252,7 @@ impl AppServerSession {
         limit: u32,
     ) -> Result<ThreadTurnsListResponse> {
         let request_id = self.next_request_id();
-        self.client
+        self.request_handle
             .request_typed(ClientRequest::ThreadTurnsList {
                 request_id,
                 params: ThreadTurnsListParams {
@@ -272,7 +273,7 @@ impl AppServerSession {
         page: ThreadItemsListResponse,
         state: &mut ThreadHistoryPagination,
         turns: &mut Vec<Turn>,
-    ) -> Result<Vec<ThreadItem>> {
+    ) -> Result<Vec<ThreadItemPayload>> {
         state.next_item_cursor = advancing_cursor(
             state.next_item_cursor.as_deref(),
             page.next_cursor,
@@ -309,8 +310,8 @@ impl AppServerSession {
             if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id)
                 && !turn.items.iter().any(|item| item.id() == entry.item.id())
             {
-                items.push(entry.item.clone());
-                turn.items.insert(/*index*/ 0, entry.item);
+                items.push(entry.item.payload.clone());
+                turn.items.insert(/*index*/ 0, ThreadItem::from(entry));
                 turn.items_view = TurnItemsView::Summary;
             }
         }
@@ -343,7 +344,7 @@ impl AppServerSession {
             return Ok(());
         }
 
-        let scope = if self.client.presentation_version() == Some(1) {
+        let scope = if self.presentation_version() == Some(1) {
             HistoryHydrationScope::Complete
         } else {
             scope
@@ -419,7 +420,7 @@ impl AppServerSession {
 fn rendered_history_rows(
     thread_id: ThreadId,
     thread: &Thread,
-    items: Vec<ThreadItem>,
+    items: Vec<ThreadItemPayload>,
     config: &Config,
     local_settings: &crate::local_settings::LocalSettings,
     width: u16,

@@ -79,6 +79,7 @@ from .v2_all import ThreadRealtimeStartedNotification
 from .v2_all import ThreadRealtimeTranscriptDeltaNotification
 from .v2_all import ThreadRealtimeTranscriptDoneNotification
 from .v2_all import ThreadRevertedNotification
+from .v2_all import ThreadSectionChangedNotification
 from .v2_all import ThreadSettingsUpdatedNotification
 from .v2_all import ThreadStartedNotification
 from .v2_all import ThreadStatusChangedNotification
@@ -167,6 +168,7 @@ KnownNotificationPayload: TypeAlias = (
     | ThreadRealtimeTranscriptDeltaNotification
     | ThreadRealtimeTranscriptDoneNotification
     | ThreadRevertedNotification
+    | ThreadSectionChangedNotification
     | ThreadSettingsUpdatedNotification
     | ThreadStartedNotification
     | ThreadStatusChangedNotification
@@ -258,6 +260,7 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "thread/realtime/transcript/delta": ThreadRealtimeTranscriptDeltaNotification,
     "thread/realtime/transcript/done": ThreadRealtimeTranscriptDoneNotification,
     "thread/reverted": ThreadRevertedNotification,
+    "thread/section/changed": ThreadSectionChangedNotification,
     "thread/settings/updated": ThreadSettingsUpdatedNotification,
     "thread/started": ThreadStartedNotification,
     "thread/status/changed": ThreadStatusChangedNotification,

@@ -6,8 +6,8 @@ impl ChatWidget {
         clippy::disallowed_methods,
         reason = "preserve the configured Cutex Claude tool accent"
     )]
-    pub(super) fn on_claude_tool(&mut self, item: ThreadItem) {
-        let ThreadItem::DynamicToolCall {
+    pub(super) fn on_claude_tool(&mut self, item: ThreadItemPayload) {
+        let ThreadItemPayload::DynamicToolCall {
             id,
             namespace,
             tool,

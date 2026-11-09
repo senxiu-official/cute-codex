@@ -259,7 +259,11 @@ async fn forced_task_abort_joins_worker_and_preserves_one_terminal() {
             expected
         );
         if authoritative {
-            let prompt = session.clone_history().await.for_prompt(&[]);
+            let prompt = session
+                .clone_history()
+                .await
+                .for_prompt(&[], session.services.image_store.as_ref())
+                .await;
             assert_eq!(
                 prompt
                     .iter()

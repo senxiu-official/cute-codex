@@ -32,6 +32,7 @@ pub mod external_input;
 pub mod external_input_record;
 pub mod external_input_status;
 pub mod external_input_view;
+pub mod hooks;
 pub mod items;
 mod legacy_events;
 pub mod local_media;

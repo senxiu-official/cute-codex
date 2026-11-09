@@ -187,6 +187,7 @@ async fn owner_carries_busy_start_and_steer_wait_for_the_specific_owner_boundary
                 PersistContext::SteeredUserInput
             )
             .await
+            .unwrap()
         );
         assert_pair_and_plain_owner(&session, &turn, &path, &value, 1).await;
         assert!(
@@ -301,7 +302,7 @@ async fn owner_carries_initial_input_records_plain_owner_then_canonical_pair() {
         request(Vec::new()).input,
         None,
         &turn.sub_id,
-        UserInputOrigin::User,
+        UserInputMetadata::default(),
     )
     .await;
     let TurnInput::UserInput { metadata, .. } = &mut input else {
@@ -317,6 +318,7 @@ async fn owner_carries_initial_input_records_plain_owner_then_canonical_pair() {
             PersistContext::Standard
         )
         .await
+        .unwrap()
     );
     assert_pair_and_plain_owner(&session, &turn, &path, &value, 2).await;
     assert_pair_and_plain_owner(&session, &turn, &path, &second, 2).await;
@@ -483,7 +485,7 @@ async fn owner_carries_uncertain_write_blocks_sampling_and_cannot_fabricate_rece
         request(Vec::new()).input,
         None,
         &turn.sub_id,
-        UserInputOrigin::User,
+        UserInputMetadata::default(),
     )
     .await;
     let TurnInput::UserInput { metadata, .. } = &mut input else {
@@ -499,6 +501,7 @@ async fn owner_carries_uncertain_write_blocks_sampling_and_cannot_fabricate_rece
             PersistContext::Standard
         )
         .await
+        .unwrap()
     );
     assert!(
         session

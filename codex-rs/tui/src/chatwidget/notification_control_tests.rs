@@ -23,7 +23,9 @@ async fn notification_item_uses_confirmed_labels_in_preview() {
                 [StatusLineItem::Notification],
                 /*use_theme_colors*/ true,
             )
-            .unwrap();
+            .unwrap()
+            .into_hyperlink_line()
+            .line;
         lines.push(
             line.spans
                 .iter()
@@ -63,7 +65,9 @@ async fn notification_styles_are_exact_and_independent_of_label_text() {
                 [StatusLineItem::Notification],
                 /*use_theme_colors*/ true,
             )
-            .unwrap();
+            .unwrap()
+            .into_hyperlink_line()
+            .line;
         let span = &line.spans[0];
         assert_eq!(span.style.add_modifier.contains(Modifier::BOLD), bold);
         let Some(Color::Rgb(r, g, b)) = span.style.fg else {

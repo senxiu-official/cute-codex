@@ -64,6 +64,9 @@ pub struct TurnInputRequest {
     pub input: TurnInput,
     /// Trusted external envelopes bound to this specific owner-input boundary.
     pub owner_carries: Vec<crate::external_input::Envelope>,
+    /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
+    /// Ignored for all other inputs, including raw user-role Responses items.
+    pub user_item_uuid: Option<uuid::Uuid>,
     pub thread_settings: ThreadSettingsOverrides,
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
@@ -123,6 +126,7 @@ impl TurnInputRequest {
             start_origin: TurnStartOrigin::Explicit,
             input,
             owner_carries: Vec::new(),
+            user_item_uuid: None,
             thread_settings: ThreadSettingsOverrides::default(),
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),

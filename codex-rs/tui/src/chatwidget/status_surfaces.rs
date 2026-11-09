@@ -4,6 +4,8 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
+use crate::bottom_pane::footer_content::FooterContent;
+use crate::bottom_pane::status_line_content::StatusLineRenderer;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
@@ -12,6 +14,7 @@ use crate::model_catalog::LUNA_RESERVE_MODEL;
 use crate::status::format_credit_micros;
 use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
+use crate::status::thread_cost_micros;
 use crate::terminal_program_status::ProgramStatus;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::ConfigLayerSource;
@@ -205,6 +208,26 @@ impl ChatWidget {
             .iter()
             .any(|i| *i != StatusLineItem::CutexNewline);
         self.bottom_pane.set_status_line_enabled(enabled);
+        let pull_request_url = self.status_line_pull_request_url().map(str::to_owned);
+        if self.status_line_renderer() == StatusLineRenderer::Extension {
+            let segments: Vec<_> = selections
+                .status_line_items
+                .iter()
+                .filter(|item| **item != StatusLineItem::CutexNewline)
+                .filter_map(|item| {
+                    self.status_line_value_for_item(*item)
+                        .map(|value| (*item, crate::cutex_status_presentation::text(*item, value)))
+                })
+                .collect();
+            let content = StatusLineRenderer::Extension.content(
+                segments,
+                self.local_settings.tui.status_line_use_colors,
+                self.thread_id,
+                pull_request_url.as_deref(),
+            );
+            self.set_status_line(content);
+            return;
+        }
         let mut rows = Vec::new();
         let mut next_frame = None;
         for group in
@@ -218,6 +241,10 @@ impl ChatWidget {
                 })
                 .collect();
             let ids: Vec<_> = segments.iter().map(|(id, _)| *id).collect();
+            let pull_request_text = segments
+                .iter()
+                .find(|(item, _)| *item == StatusLineItem::PullRequestNumber)
+                .map(|(_, text)| text.clone());
             if let Some(mut line) = crate::bottom_pane::status_line_with_notification_style(
                 segments,
                 self.local_settings.tui.status_line_use_colors,
@@ -234,7 +261,13 @@ impl ChatWidget {
                 if !self.local_settings.tui.animations {
                     crate::cutex_status_presentation::decorate_line(&mut line, &ids);
                 }
-                rows.push(line);
+                rows.push(FooterContent::HyperlinkLine(
+                    crate::bottom_pane::link_pull_request(
+                        line,
+                        pull_request_text.as_deref(),
+                        pull_request_url.as_deref(),
+                    ),
+                ));
             }
         }
         if let Some(delay) = next_frame {
@@ -245,12 +278,18 @@ impl ChatWidget {
         } else {
             self.bottom_pane.set_status_line_rows(rows);
         }
-        let hyperlink_url = selections
-            .status_line_items
-            .contains(&StatusLineItem::PullRequestNumber)
-            .then(|| self.status_line_pull_request_url())
-            .flatten();
-        self.set_status_line_hyperlink(hyperlink_url);
+    }
+
+    pub(super) fn status_line_renderer(&self) -> StatusLineRenderer {
+        if self
+            .config
+            .features
+            .enabled(Feature::TuiExtensionsStatusLine)
+        {
+            StatusLineRenderer::Extension
+        } else {
+            StatusLineRenderer::Native
+        }
     }
 
     /// Clears the terminal title Codex most recently wrote, if any.
@@ -775,6 +814,16 @@ impl ChatWidget {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
+            StatusLineItem::Profile => {
+                let layer = self.config.config_layer_stack.get_active_user_layer()?;
+                let ConfigLayerSource::User { profile, .. } = &layer.name else {
+                    return None;
+                };
+                profile.as_ref().map(|name| format!("profile: {name}"))
+            }
+            StatusLineItem::Provider => self
+                .thread_id
+                .map(|_| format!("provider: {}", self.config.model_provider_id)),
             StatusLineItem::CurrentDir | StatusLineItem::CutexWorkdir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -930,30 +979,19 @@ impl ChatWidget {
             }),
             StatusLineItem::ThreadCredits => self
                 .estimated_thread_usage()
+                .filter(|_| self.plan_type != Some(PlanType::Ent26))
                 .map(|usage| usage.estimated_usage_credits_micros)
                 .map(|credits| format!("{} credits", format_credit_micros(credits))),
             StatusLineItem::EstimatedThreadCost => self
                 .estimated_thread_usage()
-                .and_then(|usage| usage.estimated_usage_usd_micros)
+                .and_then(|usage| thread_cost_micros(usage, self.plan_type))
                 .and_then(format_estimated_usd_micros),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
-            StatusLineItem::FastMode => self
-                .model_catalog
-                .try_list_models()
-                .ok()
-                .and_then(|models| {
-                    models
-                        .into_iter()
-                        .find(|preset| preset.model == self.current_model())
-                })
-                .is_none_or(|preset| preset.supports_fast_mode())
-                .then(|| {
-                    if self.current_service_tier() == Some(ServiceTier::Fast.request_value()) {
-                        "Fast on".to_string()
-                    } else {
-                        "Fast off".to_string()
-                    }
-                }),
+            StatusLineItem::FastMode => Some(
+                self.processing_tier_display_name()
+                    .unwrap_or("Standard")
+                    .to_string(),
+            ),
             StatusLineItem::Daybreak => Some(
                 if self.daybreak_enabled && !self.side_conversation_active() {
                     "Daybreak on".to_string()
@@ -975,11 +1013,11 @@ impl ChatWidget {
         }
     }
 
-    fn status_line_pull_request_url(&self) -> Option<String> {
+    pub(super) fn status_line_pull_request_url(&self) -> Option<&str> {
         self.status_line_git_summary
             .as_ref()
             .and_then(|summary| summary.pull_request.as_ref())
-            .map(|pull_request| pull_request.url.clone())
+            .map(|pull_request| pull_request.url.as_str())
     }
 
     pub(super) fn status_surface_preview_value_for_item(
@@ -1047,6 +1085,8 @@ impl ChatWidget {
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
             StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
+            StatusSurfacePreviewItem::Profile => StatusLineItem::Profile,
+            StatusSurfacePreviewItem::Provider => StatusLineItem::Provider,
         };
         self.status_line_value_for_item(status_line_item)
     }
@@ -1143,17 +1183,29 @@ impl ChatWidget {
     fn model_with_reasoning_display_name(&self) -> String {
         let label = self.reasoning_display_name();
         let service_tier_label = self
-            .current_service_tier()
-            .and_then(|service_tier| {
-                self.current_model_service_tier_commands()
-                    .into_iter()
-                    .find(|tier| tier.id == service_tier)
-                    .map(|tier| tier.name)
-            })
-            .filter(|_| self.has_chatgpt_account)
+            .processing_tier_display_name()
             .map(|tier| format!(" {tier}"))
             .unwrap_or_default();
         format!("{} {label}{service_tier_label}", self.model_display_name())
+    }
+
+    fn processing_tier_display_name(&self) -> Option<&str> {
+        let id = self.current_service_tier()?;
+        self.model_catalog
+            .models
+            .iter()
+            .find(|preset| preset.model == self.current_model())
+            .and_then(|preset| preset.service_tiers.iter().find(|tier| tier.id == id))
+            .map(|tier| tier.name.as_str())
+            .or_else(|| {
+                (id == ServiceTier::Flex.request_value()
+                    && self
+                        .config
+                        .model_providers
+                        .get(&self.config.model_provider_id)
+                        .is_some_and(|provider| !provider.is_amazon_bedrock()))
+                .then_some("Flex")
+            })
     }
 
     /// Computes the compact runtime status label used by word-based status items.

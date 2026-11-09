@@ -3,16 +3,17 @@
 cute-codex is a modified version of OpenAI Codex (https://github.com/openai/codex), licensed under
 the Apache License, Version 2.0 (see LICENSE and NOTICE, which are upstream's and unchanged).
 
-This release is based on upstream tag `rust-v0.164.0` (commit `6aaac694803004a63c6f393d153c96d22521a6b9`). The files listed below
+This release is based on upstream tag `rust-v0.167.0` (commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`). The files listed below
 under "Modified upstream files" were changed by The Cutex Authors (Copyright 2026 The Cutex
 Authors); files under "Added files" are new in cute-codex and are licensed under the same
-Apache License, Version 2.0. The exact changes are the difference between `rust-v0.164.0` and this
+Apache License, Version 2.0. The exact changes are the difference between `rust-v0.167.0` and this
 release commit.
 
-## Modified upstream files (364)
+## Modified upstream files (366)
 
 - CHANGELOG.md
 - README.md
+- bazel/extensions/codex_release_archive.bzl
 - codex-rs/Cargo.lock
 - codex-rs/Cargo.toml
 - codex-rs/analytics/src/client_tests.rs
@@ -101,6 +102,7 @@ release commit.
 - codex-rs/app-server/tests/suite/v2/turn_steer.rs
 - codex-rs/cli/src/main.rs
 - codex-rs/cli/tests/debug_models.rs
+- codex-rs/code-mode-runtime/src/output/output_render.rs
 - codex-rs/codex-api/src/common.rs
 - codex-rs/codex-api/src/endpoint/responses_websocket.rs
 - codex-rs/codex-api/tests/clients.rs
@@ -110,7 +112,7 @@ release commit.
 - codex-rs/config/src/guardian.rs
 - codex-rs/config/src/guardian_tests.rs
 - codex-rs/core/config.schema.json
-- codex-rs/core/src/agent/control/spawn.rs
+- codex-rs/core/src/agent/history.rs
 - codex-rs/core/src/client.rs
 - codex-rs/core/src/client_common_tests.rs
 - codex-rs/core/src/client_tests.rs
@@ -125,16 +127,14 @@ release commit.
 - codex-rs/core/src/config/mod.rs
 - codex-rs/core/src/connectors.rs
 - codex-rs/core/src/context/mod.rs
-- codex-rs/core/src/context/node_repl_review_evidence.rs
 - codex-rs/core/src/context_manager/history.rs
 - codex-rs/core/src/context_manager/mod.rs
-- codex-rs/core/src/guardian/decision.rs
 - codex-rs/core/src/guardian/request_budget.rs
 - codex-rs/core/src/guardian/review_session.rs
+- codex-rs/core/src/guardian/review_session_prompt.rs
 - codex-rs/core/src/hook_runtime.rs
 - codex-rs/core/src/lib.rs
 - codex-rs/core/src/mcp_tool_call.rs
-- codex-rs/core/src/session/code_mode_warning_tests.rs
 - codex-rs/core/src/session/input_queue.rs
 - codex-rs/core/src/session/mcp.rs
 - codex-rs/core/src/session/mod.rs
@@ -147,7 +147,6 @@ release commit.
 - codex-rs/core/src/session/turn.rs
 - codex-rs/core/src/session/turn_context.rs
 - codex-rs/core/src/session/turn_input.rs
-- codex-rs/core/src/session/turn_input_tests.rs
 - codex-rs/core/src/stream_events_utils.rs
 - codex-rs/core/src/tasks/compact.rs
 - codex-rs/core/src/tasks/mod.rs
@@ -170,7 +169,6 @@ release commit.
 - codex-rs/core/tests/suite/model_runtime_selectors.rs
 - codex-rs/core/tests/suite/model_switching.rs
 - codex-rs/core/tests/suite/models_cache_ttl.rs
-- codex-rs/core/tests/suite/openai_file_mcp.rs
 - codex-rs/core/tests/suite/remote_models.rs
 - codex-rs/core/tests/suite/request_permissions.rs
 - codex-rs/core/tests/suite/rmcp_client.rs
@@ -185,6 +183,7 @@ release commit.
 - codex-rs/ext/goal/src/spec.rs
 - codex-rs/ext/goal/src/tool.rs
 - codex-rs/ext/goal/tests/goal_extension_backend.rs
+- codex-rs/ext/guardian-reviewer/src/node_repl_review_evidence.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/approval.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/decisions.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/decisions_tests.rs
@@ -204,7 +203,7 @@ release commit.
 - codex-rs/guardian-context/src/enforcement.rs
 - codex-rs/guardian-context/src/images.rs
 - codex-rs/guardian-context/src/lib.rs
-- codex-rs/guardian-context/src/node_repl.rs
+- codex-rs/guardian-context/src/preparation/repl.rs
 - codex-rs/history/src/compaction_resume_metadata.rs
 - codex-rs/history/src/lib.rs
 - codex-rs/history/src/rollout_payload.rs
@@ -225,7 +224,7 @@ release commit.
 - codex-rs/model-provider-info/src/model_provider_info_tests.rs
 - codex-rs/model-provider/src/amazon_bedrock/mod.rs
 - codex-rs/model-provider/src/capabilities.rs
-- codex-rs/model-provider/src/models_endpoint.rs
+- codex-rs/model-provider/src/gcp/mod.rs
 - codex-rs/models-manager/src/manager.rs
 - codex-rs/models-manager/src/manager_tests.rs
 - codex-rs/models-manager/src/model_info.rs
@@ -372,11 +371,14 @@ release commit.
 - codex-rs/tui/src/thread_transcript.rs
 - codex-rs/tui/src/token_usage.rs
 - codex-rs/tui/src/version.rs
+- rbe.bzl
 - sdk/python/src/openai_codex/generated/notification_registry.py
 - sdk/python/src/openai_codex/generated/v2_all.py
 - sdk/python/tests/test_contract_generation.py
+- third_party/v8/BUILD.bazel
+- tools/argument-comment-lint/lint_aspect.bzl
 
-## Added files (172)
+## Added files (173)
 
 - codex-rs/app-server-protocol/schema/json/v2/ExternalInputStatusChangedNotification.json
 - codex-rs/app-server-protocol/schema/json/v2/PresentationAppendedNotification.json
@@ -451,6 +453,7 @@ release commit.
 - codex-rs/core/tests/suite/external_input_exclusive.rs
 - codex-rs/core/tests/suite/external_input_fork.rs
 - codex-rs/core/tests/suite/model_variants.rs
+- codex-rs/guardian-context/src/node_repl.rs
 - codex-rs/login/src/auth/selected_file.rs
 - codex-rs/login/src/auth/selected_file/linux.rs
 - codex-rs/login/src/auth/selected_file/windows.rs

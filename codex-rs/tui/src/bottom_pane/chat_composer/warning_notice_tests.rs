@@ -16,7 +16,7 @@ fn composer() -> ChatComposer {
     // Keep layout fixtures independent of platform-specific default shortcuts.
     composer.footer.show_warnings_key = Some(crate::key_hint::plain(KeyCode::F(2)).into());
     composer.set_status_line_enabled(/*enabled*/ true);
-    composer.set_status_line(Some(Line::from("MODEL · ~/project")));
+    composer.set_status_line(Some(Line::from("MODEL · ~/project").into()));
     composer
 }
 
@@ -57,8 +57,8 @@ fn text(buffer: &Buffer) -> String {
 fn warning_notice_keeps_two_status_rows_and_shares_the_bottom_passive_row() {
     let mut composer = composer();
     composer.set_status_line_rows(vec![
-        Line::from("agent first row"),
-        Line::from("quota second row"),
+        Line::from("agent first row").into(),
+        Line::from("quota second row").into(),
     ]);
     let width = 80;
     for separate_status_line in [true, false] {

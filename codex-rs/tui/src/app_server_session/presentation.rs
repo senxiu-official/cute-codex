@@ -9,7 +9,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
     ) -> Result<Option<Vec<ThreadTimelineEntry>>> {
-        if self.client.presentation_version() != Some(1) {
+        if self.presentation_version() != Some(1) {
             return Ok(None);
         }
         Ok(Some(
@@ -22,7 +22,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         tx: crate::app_event_sender::AppEventSender,
     ) {
-        if self.client.presentation_version() != Some(1) {
+        if self.presentation_version() != Some(1) {
             return;
         }
         let handle = self.request_handle();

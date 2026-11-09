@@ -59,6 +59,7 @@ async fn choose_astra(
         if matches!(
             &event,
             AppEvent::UpdateModel(_)
+                | AppEvent::ApplyModelSelection { .. }
                 | AppEvent::SelectSessionModel { .. }
                 | AppEvent::AstraSelectedFromModelPicker { .. }
         ) {

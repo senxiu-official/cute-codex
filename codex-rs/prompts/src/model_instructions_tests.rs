@@ -44,7 +44,6 @@ fn test_model(model_messages: Option<ModelMessages>) -> ModelInfo {
         experimental_supported_tools: vec![],
         input_modalities: vec![],
         request_model: None,
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,

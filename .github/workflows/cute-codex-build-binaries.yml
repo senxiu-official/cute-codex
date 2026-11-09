@@ -1,4 +1,4 @@
-# cute-codex: build the native files cutex runs (codex-app-server, codex, codex-code-mode-host + the
+# cute-codex: build the native files (codex-app-server, codex, codex-code-mode-host, codex-exec-server + the
 # app-server protocol schema) for Linux x64 and Windows x64 and keep them as workflow artifacts.
 # Nothing is published from here and no signing key is in CI: the owner downloads the artifacts
 # (`gh run download`), signs them offline with minisign and uploads them to the GitHub Release.
@@ -31,9 +31,13 @@ jobs:
           - platform: linux-x64
             runner: ubuntu-22.04
             leak_policy: fail
+            rust_toolchain: "1.99.1"
           - platform: windows-x64
             runner: windows-2022
             leak_policy: warn
+            rust_toolchain: "1.95.0"
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust_toolchain }}
     defaults:
       run:
         shell: bash
@@ -81,9 +85,9 @@ jobs:
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             pkg-config libssl-dev libcap-dev liblzma-dev libbz2-dev libzstd-dev zlib1g-dev
-      - name: Rust toolchain (codex-rs/rust-toolchain.toml)
+      - name: Rust toolchain (native release matrix)
         working-directory: codex-rs
-        run: rustup toolchain install && rustc --version
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt --component rust-src && rustc --version
       - name: Target dir on the system drive (Windows; the workspace drive is smaller)
         if: runner.os == 'Windows'
         run: echo "CARGO_TARGET_DIR=C:\\cute-codex-target" >> "$GITHUB_ENV"

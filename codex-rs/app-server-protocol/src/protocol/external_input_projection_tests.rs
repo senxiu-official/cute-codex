@@ -52,13 +52,13 @@ fn complete_pair_preserves_original_identity_and_body() {
     let item = p.observe(&pair[1]).unwrap().unwrap();
     assert!(!p.is_pending());
     assert_eq!(item.turn_id, "original-turn");
-    let ThreadItem::FunctionCallOutput {
+    let ThreadItemPayload::FunctionCallOutput {
         id,
         name,
         namespace,
         output,
         external_input_view,
-    } = item.item
+    } = item.item.payload
     else {
         panic!("wrong item")
     };

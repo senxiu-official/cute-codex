@@ -132,7 +132,11 @@ async fn forced_abort_terminal_closes_interleaved_public_text_once() {
             .map(|item| serde_json::to_value(item).unwrap())
             .collect::<Vec<_>>()
     );
-    let prompt = session.clone_history().await.for_prompt(&[]);
+    let prompt = session
+        .clone_history()
+        .await
+        .for_prompt(&[], session.services.image_store.as_ref())
+        .await;
     assert!(
         !prompt
             .iter()

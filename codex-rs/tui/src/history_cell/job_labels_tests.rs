@@ -1,8 +1,8 @@
 use super::*;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-fn receipt(id: &str, action: &str) -> ThreadItem {
-    ThreadItem::McpToolCall {
+fn receipt(id: &str, action: &str) -> ThreadItemPayload {
+    ThreadItemPayload::McpToolCall {
         mcp_app_ui: None,
         id: format!("call-{id}"),
         server: "cutex_job".into(),
@@ -49,13 +49,13 @@ fn job_labels_replay_conflict_and_short_id_collision() {
 fn job_labels_unknown_result_or_server_never_creates_map() {
     let mut labels = JobLabels::default();
     let mut item = receipt("job-1", "action");
-    if let ThreadItem::McpToolCall { server, .. } = &mut item {
+    if let ThreadItemPayload::McpToolCall { server, .. } = &mut item {
         *server = "cutex_job_impostor".into();
     }
     let _ = labels.observe(&item);
     assert_eq!(labels.label("job-1"), "job-1");
     let mut item = receipt("job-1", "action");
-    if let ThreadItem::McpToolCall { arguments, .. } = &mut item {
+    if let ThreadItemPayload::McpToolCall { arguments, .. } = &mut item {
         arguments["actionId"] = json!("different");
     }
     let _ = labels.observe(&item);

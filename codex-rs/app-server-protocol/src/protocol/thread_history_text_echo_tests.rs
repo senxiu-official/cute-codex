@@ -48,8 +48,8 @@ fn persisted_full_text_terminals_replace_flattened_echoes_without_losing_parts()
                     thread_id: ThreadId::default(),
                     turn_id: "turn".into(),
                     item: item.clone(),
-                    started_at_ms: None,
-                    completed_at_ms: 1,
+                    started_at_ms: Some(10),
+                    completed_at_ms: 20,
                 },
             )));
             items.extend(
@@ -64,7 +64,11 @@ fn persisted_full_text_terminals_replace_flattened_echoes_without_losing_parts()
             turns[0].items,
             text.iter()
                 .cloned()
-                .map(ThreadItem::from)
+                .map(|item| ThreadItem {
+                    payload: item.into(),
+                    started_at_ms: Some(10),
+                    completed_at_ms: Some(20),
+                })
                 .collect::<Vec<_>>()
         );
     }

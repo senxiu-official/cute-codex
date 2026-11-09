@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Build the cute-codex native files cutex runs (codex-app-server, codex, codex-code-mode-host and the
+# Build the cute-codex native files (codex-app-server, codex, codex-code-mode-host, codex-exec-server and the
 # app-server protocol schema) and pack them as one archive per platform:
 #
-#   native-<version>-<platform>.tar.gz   codex-app-server[.exe], codex[.exe], codex-code-mode-host[.exe],
+#   native-<version>-<platform>.tar.gz   codex-app-server[.exe], codex[.exe], codex-code-mode-host[.exe], codex-exec-server[.exe],
 #                                        codex_app_server_protocol.schemas.json, cute-codex-build.json,
 #                                        LICENSE, NOTICE, THIRD_PARTY_NOTICES.md
 #
 # This is the archive format of a cutex release manifest's `native.artifacts` (cutex src/upgrade/stage.rs:
-# the three files at the archive root, ustar, no directories or links; it unpacks every file and needs only
-# those three, so the license files land next to them in natives/<version>/) and of the binary install
+# the files at the archive root, ustar, no directories or links; it unpacks every file and requires
+# app-server, CLI and Code Mode host. The standalone executor and licenses land next to them in natives/<version>/) and of the binary install
 # (docs/install/AGENT-INSTALL.md of cutex-desktop).
 #
 #   bash .github/cute-codex/build-natives.sh <platform> <out-dir>
@@ -101,10 +101,10 @@ fi
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 # 4. Build (the same two cargo runs as the from-source install; the toolchain comes from
-#    codex-rs/rust-toolchain.toml).
+#    codex-rs/rust-toolchain.toml unless RUSTUP_TOOLCHAIN explicitly selects the release toolchain).
 cd codex-rs
 cargo fetch --locked
-cargo build --locked --release -p codex-cli -p codex-app-server --bin codex --bin codex-app-server
+cargo build --locked --release -p codex-cli -p codex-app-server -p codex-exec-server-cli --bin codex --bin codex-app-server --bin codex-exec-server
 cargo build --locked --release -p codex-code-mode-host --bin codex-code-mode-host
 version="$("$tdir/release/codex-app-server$exe" --version | awk '{ print $2 }')"
 case "$version" in
@@ -116,23 +116,24 @@ esac
 stage="$root/../native-stage-$platform"
 rm -rf "${stage:?}"
 mkdir -p "$stage"
-for b in codex-app-server codex codex-code-mode-host; do
+for b in codex-app-server codex codex-code-mode-host codex-exec-server; do
   if [ "$platform" = linux-x64 ]; then
     strip -o "$stage/$b" "$tdir/release/$b"
   else
     cp "$tdir/release/$b$exe" "$stage/$b$exe"
   fi
 done
-cp app-server-protocol/schema/json/codex_app_server_protocol.schemas.json "$stage/"
+"$tdir/release/codex$exe" app-server generate-json-schema --out "$stage/.generated-schema" --experimental
+cp "$stage/.generated-schema/codex_app_server_protocol.schemas.json" "$stage/"
 # License files: the repository's LICENSE (Apache-2.0) and NOTICE, and the notices of every third-party
-# crate compiled into the three binaries (from Cargo.lock and the crate sources the build downloaded; no
+# crate compiled into the four binaries (from Cargo.lock and the crate sources the build downloaded; no
 # network, deterministic).
 for f in LICENSE NOTICE; do cp "$root/$f" "$stage/$f"; done
 if [ "$platform" = windows-x64 ]; then py=python; else py=python3; fi
 "$py" "$root/.github/cute-codex/third_party_notices.py" --manifest-path "$(winpath "$root/codex-rs/Cargo.toml")" \
-  --target "$target" --package codex-cli --package codex-app-server --package codex-code-mode-host \
+  --target "$target" --package codex-cli --package codex-app-server --package codex-code-mode-host --package codex-exec-server-cli \
   --title "cute-codex: third-party notices" \
-  --intro "codex, codex-app-server and codex-code-mode-host in this archive are cute-codex, a modified version of OpenAI Codex, licensed under the Apache License 2.0 (LICENSE; attributions in NOTICE). They are built from the third-party Rust crates below. codex-code-mode-host also links the prebuilt V8 library of the v8 crate (rusty_v8), whose published crate ships no license files: see https://github.com/denoland/rusty_v8 for V8's license and those of the libraries it bundles." \
+  --intro "codex, codex-app-server, codex-code-mode-host and codex-exec-server in this archive are cute-codex, a modified version of OpenAI Codex, licensed under the Apache License 2.0 (LICENSE; attributions in NOTICE). They are built from the third-party Rust crates below. codex-code-mode-host also links the prebuilt V8 library of the v8 crate (rusty_v8), whose published crate ships no license files: see https://github.com/denoland/rusty_v8 for V8's license and those of the libraries it bundles." \
   --out "$(winpath "$stage/THIRD_PARTY_NOTICES.md")"
 chmod 0644 "$stage/LICENSE" "$stage/NOTICE" "$stage/THIRD_PARTY_NOTICES.md"
 rustc_version="$(rustc --version)"
@@ -167,7 +168,7 @@ fi
 # 7. Pack: ustar, files only, sorted, fixed owner and mtime (the commit time), gzip without a timestamp.
 name="native-$version-$platform.tar.gz"
 mtime="$(git -C "$root" log -1 --format=%ct)"
-files=(codex-app-server$exe codex$exe codex-code-mode-host$exe codex_app_server_protocol.schemas.json cute-codex-build.json
+files=(codex-app-server$exe codex$exe codex-code-mode-host$exe codex-exec-server$exe codex_app_server_protocol.schemas.json cute-codex-build.json
   LICENSE NOTICE THIRD_PARTY_NOTICES.md)
 tar -C "$stage" --format=ustar --owner=0 --group=0 --numeric-owner --mtime="@$mtime" -cf - "${files[@]}" | gzip -n -9 > "$out/$name"
 cp "$stage/cute-codex-build.json" "$out/BUILD-INFO-$platform.json"

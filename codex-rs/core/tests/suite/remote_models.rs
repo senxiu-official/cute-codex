@@ -580,7 +580,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         request_model: None,
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,
@@ -856,7 +855,6 @@ async fn remote_models_apply_legacy_instructions(auth: CodexAuth) -> Result<()> 
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         request_model: None,
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,
@@ -1446,7 +1444,6 @@ fn test_remote_model_with_policy(
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         request_model: None,
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,
@@ -1541,7 +1538,7 @@ async fn model_catalog_url_supplies_conversation_model_and_instructions() -> Res
     model.visibility = ModelVisibility::List;
     model.supported_in_api = true;
     model.support_verbosity = false;
-    model.used_fallback_model_metadata = false;
+
     model
         .model_messages
         .as_mut()
@@ -1600,7 +1597,7 @@ async fn failed_catalog_refresh_preserves_tool_search_on_the_next_turn() -> Resu
     let mut model = codex_models_manager::model_info::model_info_from_slug("gateway-model");
     model.visibility = ModelVisibility::List;
     model.supports_search_tool = true;
-    model.used_fallback_model_metadata = false;
+
     let catalog = ModelsResponse {
         models: vec![model],
     };

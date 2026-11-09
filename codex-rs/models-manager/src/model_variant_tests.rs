@@ -16,13 +16,23 @@ fn local_variants_keep_independent_metadata_and_require_exact_selection() {
     let candidates = vec![first, second];
     let config = ModelsManagerConfig::default();
     for expected in &candidates {
-        let actual = construct_model_info_from_candidates(&expected.slug, &candidates, &config);
-        assert_eq!(&actual, expected);
+        let actual = construct_model_info_from_candidates(
+            &expected.slug,
+            &candidates,
+            ModelOrigin::Provider,
+            &config,
+        );
+        assert_eq!(actual.model.as_ref(), expected);
         assert_eq!(actual.request_model(), "gpt-6-astra");
     }
     for unknown in ["Astra [400K] typo", "provider/Astra [400K]"] {
-        let actual = construct_model_info_from_candidates(unknown, &candidates, &config);
+        let actual = construct_model_info_from_candidates(
+            unknown,
+            &candidates,
+            ModelOrigin::Provider,
+            &config,
+        );
         assert_eq!(actual.request_model(), unknown);
-        assert!(actual.used_fallback_model_metadata);
+        assert_eq!(actual.origin, ModelOrigin::Synthetic);
     }
 }

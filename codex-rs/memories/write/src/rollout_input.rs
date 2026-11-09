@@ -113,6 +113,7 @@ pub(crate) fn serialize_tiered_input(
             RolloutItem::ResponseItem(item) => sanitize_response_item_for_memories(&item.item),
             RolloutItem::InterAgentCommunication(message) => Some(message.to_model_input_item()),
             RolloutItem::ExternalInput(_)
+            | RolloutItem::DynamicToolsUpdated { .. }
             | RolloutItem::SessionMeta(_)
             | RolloutItem::InterAgentCommunicationMetadata { .. }
             | RolloutItem::Compacted(_)

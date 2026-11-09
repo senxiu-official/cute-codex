@@ -1,6 +1,7 @@
 use super::parse_saved_image_path;
 use super::put_away_image_placeholder;
 use crate::context_manager::ContextManager;
+use codex_attachment_store::InlineAttachmentStore;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -112,10 +113,11 @@ fn generated_calls(range: std::ops::Range<usize>) -> Vec<ResponseItem> {
 }
 
 /// Call ids whose image is a placeholder in the prompt, in order.
-fn placeholders_in_prompt(history: &ContextManager) -> Vec<String> {
+async fn placeholders_in_prompt(history: &ContextManager) -> Vec<String> {
     history
         .clone()
-        .for_prompt(&default_input_modalities())
+        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .await
         .iter()
         .filter_map(|item| match item {
             ResponseItem::FunctionCallOutput {
@@ -170,15 +172,15 @@ fn parses_saved_path_from_hint() {
     assert_eq!(parse_saved_image_path("some other text"), None);
 }
 
-#[test]
-fn below_threshold_nothing_changes() {
+#[tokio::test]
+async fn below_threshold_nothing_changes() {
     let mut history = history_with(&generated_calls(0..20));
     assert_eq!(history.put_away_generated_images(20, 5), 0);
-    assert_eq!(placeholders_in_prompt(&history), Vec::<String>::new());
+    assert_eq!(placeholders_in_prompt(&history).await, Vec::<String>::new());
 }
 
-#[test]
-fn above_threshold_puts_away_all_but_newest_keep_and_keeps_raw_items() {
+#[tokio::test]
+async fn above_threshold_puts_away_all_but_newest_keep_and_keeps_raw_items() {
     let items = generated_calls(0..21);
     let mut history = history_with(&items);
     let tokens_before = history
@@ -186,11 +188,14 @@ fn above_threshold_puts_away_all_but_newest_keep_and_keeps_raw_items() {
         .unwrap();
 
     assert_eq!(history.put_away_generated_images(20, 5), 16);
-    assert_eq!(placeholders_in_prompt(&history), names(0..16));
+    assert_eq!(placeholders_in_prompt(&history).await, names(0..16));
     // Raw history keeps every image.
     assert_eq!(history.raw_items().cloned().collect::<Vec<_>>(), items);
     // The hint after a put-away image is untouched.
-    let prompt = history.clone().for_prompt(&default_input_modalities());
+    let prompt = history
+        .clone()
+        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .await;
     let ResponseItem::FunctionCallOutput { output, .. } = &prompt[1] else {
         panic!("expected function output, got {:?}", prompt[1]);
     };
@@ -212,8 +217,8 @@ fn above_threshold_puts_away_all_but_newest_keep_and_keeps_raw_items() {
     );
 }
 
-#[test]
-fn other_images_are_never_put_away_but_count_toward_newest_keep() {
+#[tokio::test]
+async fn other_images_are_never_put_away_but_count_toward_newest_keep() {
     let mut items = generated_calls(0..21);
     items.extend(viewed("view0"));
     items.push(user_image_message());
@@ -222,20 +227,26 @@ fn other_images_are_never_put_away_but_count_toward_newest_keep() {
 
     // The newest 5 images are view1, the user image, view0, img20 and img19.
     assert_eq!(history.put_away_generated_images(20, 5), 19);
-    assert_eq!(placeholders_in_prompt(&history), names(0..19));
+    assert_eq!(placeholders_in_prompt(&history).await, names(0..19));
 }
 
-#[test]
-fn second_batch_waits_for_threshold_so_prefix_stays_stable() {
+#[tokio::test]
+async fn second_batch_waits_for_threshold_so_prefix_stays_stable() {
     let mut history = history_with(&generated_calls(0..21));
     assert_eq!(history.put_away_generated_images(20, 5), 16);
-    let first_prompt = history.clone().for_prompt(&default_input_modalities());
+    let first_prompt = history
+        .clone()
+        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .await;
 
     // One more image: 6 inline, below the threshold. Nothing changes, the prefix is identical.
     record(&mut history, &generated("img21"));
     assert_eq!(history.put_away_generated_images(20, 5), 0);
     assert_eq!(history.put_away_generated_images(20, 5), 0);
-    let second_prompt = history.clone().for_prompt(&default_input_modalities());
+    let second_prompt = history
+        .clone()
+        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .await;
     assert_eq!(second_prompt[..first_prompt.len()], first_prompt[..]);
 
     // Up to 21 inline again (img16..img36): the next batch.
@@ -243,14 +254,14 @@ fn second_batch_waits_for_threshold_so_prefix_stays_stable() {
     assert_eq!(history.put_away_generated_images(20, 5), 0);
     record(&mut history, &generated("img36"));
     assert_eq!(history.put_away_generated_images(20, 5), 16);
-    assert_eq!(placeholders_in_prompt(&history), names(0..32));
+    assert_eq!(placeholders_in_prompt(&history).await, names(0..32));
 
     // A clone carries the put-away set.
-    assert_eq!(placeholders_in_prompt(&history.clone()), names(0..32));
+    assert_eq!(placeholders_in_prompt(&history.clone()).await, names(0..32));
 }
 
-#[test]
-fn code_mode_custom_tool_outputs_are_put_away() {
+#[tokio::test]
+async fn code_mode_custom_tool_outputs_are_put_away() {
     let items: Vec<ResponseItem> = (0..4)
         .flat_map(|n| {
             let call_id = format!("img{n}");
@@ -284,7 +295,10 @@ fn code_mode_custom_tool_outputs_are_put_away() {
     let mut history = history_with(&items);
 
     assert_eq!(history.put_away_generated_images(3, 1), 3);
-    let prompt = history.clone().for_prompt(&default_input_modalities());
+    let prompt = history
+        .clone()
+        .for_prompt(&default_input_modalities(), &InlineAttachmentStore)
+        .await;
     let ResponseItem::CustomToolCallOutput { output, .. } = &prompt[1] else {
         panic!("expected custom tool output, got {:?}", prompt[1]);
     };

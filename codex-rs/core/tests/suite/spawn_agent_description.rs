@@ -91,7 +91,6 @@ fn test_model_info(
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         request_model: None,
-        used_fallback_model_metadata: false,
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,

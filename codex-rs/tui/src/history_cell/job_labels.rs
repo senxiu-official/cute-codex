@@ -1,7 +1,7 @@
 //! Same-thread display labels learned only from validated submit receipts.
 use super::cutex_mcp_display;
 use super::mcp::McpInvocation;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
@@ -22,8 +22,8 @@ pub(super) fn short_id(id: &str) -> String {
     )
 }
 impl JobLabels {
-    pub(crate) fn observe(&mut self, item: &ThreadItem) -> Option<String> {
-        let ThreadItem::McpToolCall {
+    pub(crate) fn observe(&mut self, item: &ThreadItemPayload) -> Option<String> {
+        let ThreadItemPayload::McpToolCall {
             server,
             tool,
             arguments,

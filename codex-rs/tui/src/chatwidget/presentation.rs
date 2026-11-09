@@ -109,11 +109,11 @@ impl ChatWidget {
                 (
                     ThreadTimelineEntry::Item { item, .. },
                     Some(ThreadTimelineEntry::Presentation { item: record, .. }),
-                ) => Some((item.as_ref(), record, true)),
+                ) => Some((&item.payload, record, true)),
                 (
                     ThreadTimelineEntry::Presentation { item: record, .. },
                     Some(ThreadTimelineEntry::Item { item, .. }),
-                ) => Some((item.as_ref(), record, false)),
+                ) => Some((&item.payload, record, false)),
                 _ => None,
             };
             if let Some((item, record, counterpart_first)) = pair
@@ -129,7 +129,7 @@ impl ChatWidget {
                     match (reference.kind.clone(), item) {
                         (
                             codex_protocol::presentation::PresentationReferenceKind::ExternalInput,
-                            ThreadItem::FunctionCallOutput {
+                            ThreadItemPayload::FunctionCallOutput {
                                 id,
                                 name,
                                 namespace,
@@ -150,7 +150,7 @@ impl ChatWidget {
                         }
                         (
                             codex_protocol::presentation::PresentationReferenceKind::McpInvocation,
-                            ThreadItem::McpToolCall {
+                            ThreadItemPayload::McpToolCall {
                                 id,
                                 server,
                                 tool,
@@ -182,7 +182,7 @@ impl ChatWidget {
                             record: record.clone(),
                             counterpart_first,
                         });
-                    self.replay_thread_item(*item, turn_id, replay_kind);
+                    self.replay_thread_item(item.payload, turn_id, replay_kind);
                     if self.transcript.pending_presentation_group.take().is_some() {
                         // A duplicate/non-rendered counterpart cannot justify hiding this fact.
                         self.on_presentation(record);
@@ -203,11 +203,11 @@ impl ChatWidget {
                 ThreadTimelineEntry::Presentation { item, .. } => self.on_presentation(item),
                 ThreadTimelineEntry::Item { turn_id, item, .. } => {
                     if hidden.contains(&turn_id)
-                        && matches!(item.as_ref(), ThreadItem::UserMessage { .. })
+                        && matches!(&item.payload, ThreadItemPayload::UserMessage { .. })
                     {
                         continue;
                     }
-                    self.replay_thread_item(*item, turn_id, replay_kind);
+                    self.replay_thread_item(item.payload, turn_id, replay_kind);
                 }
                 ThreadTimelineEntry::TurnStarted { turn_id, .. } => {
                     if turns

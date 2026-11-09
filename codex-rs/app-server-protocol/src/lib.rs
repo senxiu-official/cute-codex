@@ -1,17 +1,7 @@
 mod experimental_api;
-#[cfg(test)]
-mod export;
 mod precomputed_exports;
-#[cfg(test)]
-#[path = "precomputed_exports_tests.rs"]
-mod precomputed_exports_tests;
 mod protocol;
 pub mod rpc;
-#[cfg(test)]
-mod schema_fixtures;
-#[cfg(test)]
-#[path = "schema_fixtures_tests.rs"]
-mod schema_fixtures_tests;
 
 pub use experimental_api::*;
 pub use precomputed_exports::GenerateTsOptions;
@@ -71,3 +61,14 @@ pub(crate) use schemars::JsonSchema;
 pub(crate) use ts_rs::TS;
 
 pub use protocol::external_input_projection::ExternalInputProjection;
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
+// Release tooling selects this module's schema writer by its exact test name.
+#[cfg(test)]
+mod schema_fixtures_tests;
+#[cfg(test)]
+use tests::export;
+#[cfg(test)]
+use tests::schema_fixtures;

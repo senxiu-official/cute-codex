@@ -7,7 +7,7 @@ async fn cutex_mcp_completed_item_keeps_full_transcript() {
     let _ = drain_insert_history(&mut rx);
     // The same ThreadItem is emitted by direct and CodeMode nested MCP dispatch.
     // Core's code_mode_can_print_structured_mcp_tool_result_fields proves the producer.
-    let item = AppServerThreadItem::McpToolCall {
+    let item = AppServerThreadItemPayload::McpToolCall {
         mcp_app_ui: None,
         id: "exec-nested-call".into(),
         server: "cutex_job".into(),
@@ -29,7 +29,7 @@ async fn cutex_mcp_completed_item_keeps_full_transcript() {
         duration_ms: Some(1),
     };
     let mut started = item.clone();
-    if let AppServerThreadItem::McpToolCall { status, result, .. } = &mut started {
+    if let AppServerThreadItemPayload::McpToolCall { status, result, .. } = &mut started {
         *status = codex_app_server_protocol::McpToolCallStatus::InProgress;
         *result = None;
     }
@@ -66,8 +66,12 @@ async fn cutex_mcp_completed_item_keeps_full_transcript() {
 
 #[tokio::test]
 async fn cutex_mcp_action_label_live_and_history_reconstruction() {
-    fn item(tool: &str, args: serde_json::Value, value: serde_json::Value) -> AppServerThreadItem {
-        AppServerThreadItem::McpToolCall {
+    fn item(
+        tool: &str,
+        args: serde_json::Value,
+        value: serde_json::Value,
+    ) -> AppServerThreadItemPayload {
+        AppServerThreadItemPayload::McpToolCall {
             mcp_app_ui: None,
             id: tool.into(),
             server: "cutex_job".into(),

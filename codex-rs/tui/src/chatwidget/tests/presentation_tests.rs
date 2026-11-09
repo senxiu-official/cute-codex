@@ -149,7 +149,7 @@ async fn durable_notice_adjacent_group_both_orders_and_reconnect() {
             }];
         record.semantic_sha256 = record.semantic_digest();
         record.receipt_id = record.receipt_digest();
-        let input = Entry::Item { position:1, turn_id:"turn".into(), item:Box::new(AppServerThreadItem::FunctionCallOutput { external_input_view: None, id:"input-1".into(), name:"external_event".into(), namespace:Some("external".into()), output:codex_protocol::models::FunctionCallOutputBody::Text(json!({"source":{"kind":"service","id":"build"},"type":"message","text":"Original input body"}).to_string()) }) };
+        let input = Entry::Item { position:1, turn_id:"turn".into(), item:Box::new(codex_app_server_protocol::ThreadItem::untimed(AppServerThreadItemPayload::FunctionCallOutput { external_input_view: None, id:"input-1".into(), name:"external_event".into(), namespace:Some("external".into()), output:codex_protocol::models::FunctionCallOutputBody::Text(json!({"source":{"kind":"service","id":"build"},"type":"message","text":"Original input body"}).to_string()) })) };
         let display = Entry::Presentation {
             position: 2,
             item: record.clone(),
@@ -213,7 +213,7 @@ async fn durable_notice_missing_nonadjacent_and_partial_refs() {
         }
         record.semantic_sha256 = record.semantic_digest();
         record.receipt_id = record.receipt_digest();
-        let mut timeline=vec![Entry::Item {position:1,turn_id:"turn".into(),item:Box::new(AppServerThreadItem::FunctionCallOutput { external_input_view: None,id:"input".into(),name:"external_event".into(),namespace:Some("external".into()),output:codex_protocol::models::FunctionCallOutputBody::Text(json!({"source":{"kind":"service","id":"build"},"type":"message","text":"Independent body"}).to_string())})}];
+        let mut timeline=vec![Entry::Item {position:1,turn_id:"turn".into(),item:Box::new(codex_app_server_protocol::ThreadItem::untimed(AppServerThreadItemPayload::FunctionCallOutput { external_input_view: None,id:"input".into(),name:"external_event".into(),namespace:Some("external".into()),output:codex_protocol::models::FunctionCallOutputBody::Text(json!({"source":{"kind":"service","id":"build"},"type":"message","text":"Independent body"}).to_string())}))}];
         if scenario == "nonadjacent" {
             timeline.push(Entry::Presentation {
                 position: 2,
@@ -254,7 +254,7 @@ async fn durable_notice_active_mcp_group_keeps_both_facts() {
         let thread = ThreadId::new();
         chat.thread_id = Some(thread);
         let _ = drain_insert_history(&mut rx);
-        let mut item = AppServerThreadItem::McpToolCall {
+        let mut item = AppServerThreadItemPayload::McpToolCall {
             mcp_app_ui: None,
             id: "call".into(),
             server: "cutex_job".into(),
@@ -289,7 +289,7 @@ async fn durable_notice_active_mcp_group_keeps_both_facts() {
                 .collect::<String>();
             assert!(prior.contains("Report"));
         }
-        if let AppServerThreadItem::McpToolCall { status, result, .. } = &mut item {
+        if let AppServerThreadItemPayload::McpToolCall { status, result, .. } = &mut item {
             *status = codex_app_server_protocol::McpToolCallStatus::Completed;
             *result = Some(Box::new(codex_app_server_protocol::McpToolCallResult {
                 content: vec![

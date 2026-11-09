@@ -1,22 +1,22 @@
 """Materialize the stable release packages selected before running Bazel."""
 
-_CODEX_RELEASE_BUILD_FILE = """\
-package(default_visibility = ["//visibility:public"])
-
-filegroup(
-    name = "codex",
-    srcs = [{entrypoint}],
-)
-
-filegroup(
-    name = "package",
-    srcs = glob([
-        "codex-package.json",
-        {binaries},
-        {resources},
-        {path},
-    ]),
-)
+_CODEX_RELEASE_BUILD_FILE = """\\\r
+package(default_visibility = ["//visibility:public"])\r
+\r
+filegroup(\r
+    name = "codex",\r
+    srcs = [{entrypoint}],\r
+)\r
+\r
+filegroup(\r
+    name = "package",\r
+    srcs = glob([\r
+        "codex-package.json",\r
+        {binaries},\r
+        {resources},\r
+        {path},\r
+    ]),\r
+)\r
 """
 
 def _codex_release_repository_impl(repository_ctx):

@@ -89,8 +89,8 @@
     },
     {
       "path": "codex-rs/app-server/README.md",
-      "sha256": "c5f91091bd3895eb56589a994aabbbf7e25a78c570208216b32c95c5166f9b16",
-      "size": 49816
+      "sha256": "663c55755f4d594d0a611704c0b5baa7118d766db24a5b8bc712ae4930eba2fb",
+      "size": 49828
     },
     {
       "path": "codex-rs/app-server/src/bespoke_event_handling.rs",

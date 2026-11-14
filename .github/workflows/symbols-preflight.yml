@@ -17,7 +17,7 @@ jobs:
         run: '[[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with: {ref: '${{ inputs.source_ref }}', persist-credentials: false}
-      - name: Original native-path encryption
+      - name: Original native-path encryption (negative control)
         id: native_path
         continue-on-error: true
         run: |
@@ -56,6 +56,7 @@ jobs:
           row={"dummyPayloadOnly":True,"nativePath":os.environ["NATIVE_PATH"],"posixPath":os.environ["POSIX_PATH"]}
           (Path(os.environ["RUNNER_TEMP"])/"symbol-preflight.json").write_text(json.dumps(row,indent=2)+"\n")
           print(json.dumps(row))
+          if row["posixPath"] != "success": raise SystemExit("Canonical POSIX encryption recipe failed")
           PY
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: always()

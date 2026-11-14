@@ -39,8 +39,8 @@
     },
     {
       "path": ".github/workflows/cute-codex-build-binaries.yml",
-      "sha256": "0c5dc388509a55e3ceec8547196086f8bcefc48cde1c0b05475c80e8daccf995",
-      "size": 7821
+      "sha256": "240dc4415279f644b6ae315a43af7a8051abf3c5b4ff7f0d2a63c6024aea3034",
+      "size": 7837
     },
     {
       "path": ".github/workflows/sign-release.yml",
@@ -49,8 +49,8 @@
     },
     {
       "path": ".github/workflows/symbols-preflight.yml",
-      "size": 3240,
-      "sha256": "eb06a99f511fe0f2f9037ef175db59f041c16bb74a65104abee1f88424af6273"
+      "size": 3364,
+      "sha256": "f9593b2a0c499dd3b0fd28e6524b9d33555ae64cad7fa1745cb9241cabfc5cc9"
     },
     {
       "path": "CHANGELOG.md",

@@ -117,7 +117,7 @@ jobs:
           mkdir -p "$symbols"
           python .github/cute-codex/pdb-identity.py --bin-dir "$CARGO_TARGET_DIR/release" --out "$symbols/PDB-MATCH.json"
           cp "$CARGO_TARGET_DIR/release/"{codex,codex_app_server,codex_code_mode_host,codex_exec_server}.pdb "$symbols/"
-          gpg_home="$RUNNER_TEMP/symbol-encryption"
+          gpg_home="$(cygpath -u "$RUNNER_TEMP")/symbol-encryption"
           mkdir -p "$gpg_home"
           gpg --homedir "$gpg_home" --batch --import .github/cute-codex/symbol-retention.pub
           recipient="$(gpg --homedir "$gpg_home" --batch --with-colons --list-keys | awk -F: '$1 == "fpr" {print $10; exit}')"

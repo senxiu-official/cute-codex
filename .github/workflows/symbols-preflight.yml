@@ -1,0 +1,67 @@
+name: Native symbol encryption preflight
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref: {description: Exact public source containing the symbol encryption key, required: true, type: string}
+permissions:
+  contents: read
+jobs:
+  encryption:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    defaults:
+      run: {shell: bash}
+    steps:
+      - name: Validate exact source
+        env: {SOURCE_REF: '${{ inputs.source_ref }}'}
+        run: '[[ "$SOURCE_REF" =~ ^[a-f0-9]{40}$ ]]'
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with: {ref: '${{ inputs.source_ref }}', persist-credentials: false}
+      - name: Original native-path encryption
+        id: native_path
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          symbols="$RUNNER_TEMP/private-native-symbols"
+          mkdir -p "$symbols"
+          printf 'packaging preflight only\n' > "$symbols/PDB-MATCH.json"
+          gpg_home="$RUNNER_TEMP/symbol-encryption"
+          mkdir -p "$gpg_home"
+          command -v gpg
+          gpg --homedir "$gpg_home" --batch --import .github/cute-codex/symbol-retention.pub
+          recipient="$(gpg --homedir "$gpg_home" --batch --with-colons --list-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test "$recipient" = D2651CD822AFFC831111C9B94ACDCF59358F664C
+          tar -C "$symbols" -cf - . | gpg --homedir "$gpg_home" --batch --trust-model always --recipient "$recipient" --encrypt --output "$RUNNER_TEMP/native-path-preflight.tar.gpg"
+      - name: POSIX-normalized encryption
+        id: posix_path
+        run: |
+          set -euo pipefail
+          symbols="$RUNNER_TEMP/private-native-symbols"
+          gpg_home="$(cygpath -u "$RUNNER_TEMP")/symbol-encryption-posix"
+          mkdir -p "$symbols" "$gpg_home"
+          printf 'packaging preflight only\n' > "$symbols/PDB-MATCH.json"
+          gpg --homedir "$gpg_home" --batch --import .github/cute-codex/symbol-retention.pub
+          recipient="$(gpg --homedir "$gpg_home" --batch --with-colons --list-keys | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test "$recipient" = D2651CD822AFFC831111C9B94ACDCF59358F664C
+          tar -C "$symbols" -cf - . | gpg --homedir "$gpg_home" --batch --trust-model always --recipient "$recipient" --encrypt --output "$RUNNER_TEMP/posix-path-preflight.tar.gpg"
+      - name: Record fresh-keyring outcomes
+        if: always()
+        env:
+          NATIVE_PATH: '${{ steps.native_path.outcome }}'
+          POSIX_PATH: '${{ steps.posix_path.outcome }}'
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          row={"dummyPayloadOnly":True,"nativePath":os.environ["NATIVE_PATH"],"posixPath":os.environ["POSIX_PATH"]}
+          (Path(os.environ["RUNNER_TEMP"])/"symbol-preflight.json").write_text(json.dumps(row,indent=2)+"\n")
+          print(json.dumps(row))
+          PY
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: always()
+        with:
+          name: symbol-preflight-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/symbol-preflight.json
+            ${{ runner.temp }}/*-path-preflight.tar.gpg
+          retention-days: 14

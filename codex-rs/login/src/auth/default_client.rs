@@ -270,6 +270,26 @@ pub fn create_client_for_route(
     create_client_for_route_with_builder(http_client_factory, request_url, route_class, builder)
 }
 
+/// Creates a routed client whose redirect observations can prevent request replay.
+pub fn create_client_for_route_with_redirect_tracking(
+    http_client_factory: &HttpClientFactory,
+    request_url: &str,
+    route_class: ClientRouteClass,
+    redirect_policy: ClientRedirectPolicy,
+    redirect_observed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
+    let builder = match redirect_policy {
+        ClientRedirectPolicy::Default => default_http_client_builder(),
+        ClientRedirectPolicy::Reject => default_http_client_builder().without_redirects(),
+    };
+    create_client_for_route_with_builder(
+        http_client_factory,
+        request_url,
+        route_class,
+        builder.with_redirect_tracking(redirect_observed),
+    )
+}
+
 fn create_client_for_route_with_builder(
     http_client_factory: &HttpClientFactory,
     request_url: &str,

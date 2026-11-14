@@ -80,7 +80,6 @@ use codex_login::RefreshTokenError;
 use codex_login::UnauthorizedRecovery;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::add_originator_header;
-use codex_login::default_client::create_client_for_route;
 use codex_otel::SessionTelemetry;
 use codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC;
 use codex_otel::current_span_w3c_trace_context;
@@ -256,7 +255,7 @@ struct CurrentClientSetup {
 }
 
 impl CurrentClientSetup {
-    fn build_api_transport(&self, endpoint: &str) -> Result<ReqwestTransport> {
+    fn build_api_transport(&self, endpoint: &str) -> Result<(ReqwestTransport, Arc<AtomicBool>)> {
         let api_provider = &self.api_provider;
         let redirect_policy = if api_provider
             .headers
@@ -266,14 +265,19 @@ impl CurrentClientSetup {
         } else {
             self.redirect_policy
         };
-        let client = create_client_for_route(
+        let redirect_observed = Arc::new(AtomicBool::new(false));
+        let client = codex_login::default_client::create_client_for_route_with_redirect_tracking(
             &self.http_client_factory,
             &api_provider.url_for_path(endpoint),
             ClientRouteClass::Api,
             redirect_policy,
+            Arc::clone(&redirect_observed),
         )
         .map_err(std::io::Error::from)?;
-        Ok(ReqwestTransport::from_http_client(client))
+        Ok((
+            ReqwestTransport::from_http_client(client),
+            redirect_observed,
+        ))
     }
 }
 
@@ -851,7 +855,8 @@ impl ModelClient {
         if let Some(api_provider) = api_provider_override {
             client_setup.api_provider = api_provider;
         }
-        let transport = client_setup.build_api_transport(REALTIME_CALLS_ENDPOINT)?;
+        let (transport, _redirect_observed) =
+            client_setup.build_api_transport(REALTIME_CALLS_ENDPOINT)?;
         let response =
             ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
                 .create_with_session_and_headers(sdp, session_config, extra_headers)
@@ -899,7 +904,8 @@ impl ModelClient {
         let client_setup = self
             .current_client_setup(ClientRouting::ConfiguredProvider)
             .await?;
-        let transport = client_setup.build_api_transport(MEMORIES_SUMMARIZE_ENDPOINT)?;
+        let (transport, _redirect_observed) =
+            client_setup.build_api_transport(MEMORIES_SUMMARIZE_ENDPOINT)?;
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -2044,7 +2050,18 @@ impl ResponsesHttpExecutor<'_> {
                 .client
                 .responses_headers(client_setup.auth.as_ref(), model_info.request_model());
             tracing::Span::current().record("api.path", "/responses");
-            let transport = client_setup.build_api_transport("/responses")?;
+            let (transport, redirect_observed) = client_setup.build_api_transport("/responses")?;
+            let transport = if self.external_input_attempt {
+                // The normal HTTP and sampling retry loops stay disabled for
+                // claimed mail. Only a connection that never reached HTTP may
+                // be re-established; output, tools and receipts are not replayed.
+                transport.with_connect_retries(
+                    redirect_observed,
+                    self.client.state.provider.info().request_max_retries(),
+                )
+            } else {
+                transport
+            };
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),

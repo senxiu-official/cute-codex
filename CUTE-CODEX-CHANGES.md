@@ -9,7 +9,7 @@ Authors); files under "Added files" are new in cute-codex and are licensed under
 Apache License, Version 2.0. The exact changes are the difference between `rust-v0.167.0` and this
 release commit.
 
-## Modified upstream files (366)
+## Modified upstream files (370)
 
 - CHANGELOG.md
 - README.md
@@ -115,6 +115,7 @@ release commit.
 - codex-rs/core/src/agent/history.rs
 - codex-rs/core/src/client.rs
 - codex-rs/core/src/client_common_tests.rs
+- codex-rs/core/src/client_runtime_auth_tests.rs
 - codex-rs/core/src/client_tests.rs
 - codex-rs/core/src/client_tool_metadata_tests.rs
 - codex-rs/core/src/codex_thread.rs
@@ -208,7 +209,10 @@ release commit.
 - codex-rs/history/src/lib.rs
 - codex-rs/history/src/rollout_payload.rs
 - codex-rs/history/src/tests.rs
+- codex-rs/http-client/src/lib.rs
+- codex-rs/http-client/src/transport.rs
 - codex-rs/login/Cargo.toml
+- codex-rs/login/src/auth/default_client.rs
 - codex-rs/login/src/auth/manager.rs
 - codex-rs/login/src/auth/mod.rs
 - codex-rs/login/src/auth/storage.rs
@@ -378,7 +382,7 @@ release commit.
 - third_party/v8/BUILD.bazel
 - tools/argument-comment-lint/lint_aspect.bzl
 
-## Added files (173)
+## Added files (175)
 
 - codex-rs/app-server-protocol/schema/json/v2/ExternalInputStatusChangedNotification.json
 - codex-rs/app-server-protocol/schema/json/v2/PresentationAppendedNotification.json
@@ -454,6 +458,8 @@ release commit.
 - codex-rs/core/tests/suite/external_input_fork.rs
 - codex-rs/core/tests/suite/model_variants.rs
 - codex-rs/guardian-context/src/node_repl.rs
+- codex-rs/http-client/src/connect_retry.rs
+- codex-rs/http-client/tests/connect_retry.rs
 - codex-rs/login/src/auth/selected_file.rs
 - codex-rs/login/src/auth/selected_file/linux.rs
 - codex-rs/login/src/auth/selected_file/windows.rs

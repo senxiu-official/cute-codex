@@ -7,6 +7,7 @@ mod chatgpt_routing_affinity;
 mod client;
 mod client_builder;
 mod client_tls;
+mod connect_retry;
 mod custom_ca;
 mod error;
 mod native_roots;

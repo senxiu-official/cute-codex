@@ -1,11 +1,11 @@
 {
   "project": "cute-codex",
-  "version": "0.167.0-r60",
-  "exportDate": "2026-11-09",
+  "version": "0.167.0-r61",
+  "exportDate": "2026-11-14",
   "sourceCommit": null,
   "sourceCommitNote": "withheld: kept in the private export record next to the export directory",
   "license": "Apache-2.0",
-  "fileCount": 547,
+  "fileCount": 555,
   "files": [
     {
       "path": ".github/cute-codex/build-natives.sh",
@@ -18,9 +18,19 @@
       "size": 113
     },
     {
+      "path": ".github/cute-codex/pdb-identity.py",
+      "sha256": "a53f1aeaec06ea14aad891d82af8e28245e61a94daae7b25030c3336bc2cbae3",
+      "size": 2525
+    },
+    {
       "path": ".github/cute-codex/sign-and-upload.sh",
-      "sha256": "f627eec11dfeeaf5c4a6e341b8e04ba771bc0f286bc66290991327a3d5a63413",
-      "size": 31189
+      "sha256": "8fa5cb496a25840b5bbbb88be36c41dff36680c8e4a6bbb37b5846592b92be06",
+      "size": 31875
+    },
+    {
+      "path": ".github/cute-codex/symbol-retention.pub",
+      "sha256": "4bdb165d81272044279cdc48ee974f2b81edaa50bae4eb30217ac4516bd0b490",
+      "size": 1310
     },
     {
       "path": ".github/cute-codex/third_party_notices.py",
@@ -29,8 +39,8 @@
     },
     {
       "path": ".github/workflows/cute-codex-build-binaries.yml",
-      "sha256": "6aa4bb30475a1a56beca6b08510a0c83e9602cf3a76fff82b56ac55fc1b25a56",
-      "size": 6503
+      "sha256": "f83466ddd0493733fac480fd8807485b4239809d8c7ed742940a5741bd3ca79c",
+      "size": 7825
     },
     {
       "path": ".github/workflows/sign-release.yml",
@@ -44,8 +54,8 @@
     },
     {
       "path": "CUTE-CODEX-CHANGES.md",
-      "sha256": "3db5c9ec6a9443094fffa084cee2a5a134925655e3363c6811d708908b770224",
-      "size": 33495
+      "sha256": "4bec9952039a7142c532b9544fafbbbd92fe478fa5a36753f55fcaa12b5a470a",
+      "size": 33752
     },
     {
       "path": "NOTICE",
@@ -64,12 +74,12 @@
     },
     {
       "path": "codex-rs/Cargo.lock",
-      "sha256": "ebcec0d64eec1ef5b6c382966a92419323d3fbd9100a9bb47fa645daebfb2720",
+      "sha256": "ee8eb647f662a935845642b59edc98bc3b2b280e21c2835f71b74f3052b2e5f9",
       "size": 410914
     },
     {
       "path": "codex-rs/Cargo.toml",
-      "sha256": "7e78661992fb0c278f2ad475ee83c106b8ba82121a3047af4f2677af24d93b2c",
+      "sha256": "5c75d56ddfa512e3e07ca735ed91b005415510ee154395f31e74f9e42b9596cf",
       "size": 22045
     },
     {
@@ -759,8 +769,8 @@
     },
     {
       "path": "codex-rs/core/src/client.rs",
-      "sha256": "b8ac217f34567b8659e91e99277ae2a44b2a285aec2d4d9aac72591aabc62c71",
-      "size": 138327
+      "sha256": "070708d7ed2450b5ea470a0bebd5e148456d83aa8bbc88cbd5bf06f13d2f61a5",
+      "size": 139140
     },
     {
       "path": "codex-rs/core/src/client_common_tests.rs",
@@ -773,9 +783,14 @@
       "size": 10435
     },
     {
+      "path": "codex-rs/core/src/client_runtime_auth_tests.rs",
+      "sha256": "46efda96d5e04974311708a3793884b100e777a6c02cdb470369981dbd6d43db",
+      "size": 8644
+    },
+    {
       "path": "codex-rs/core/src/client_tests.rs",
-      "sha256": "58350331eb5ca0d978b83abae947906ed02931923f470cebc461b69d463a76b8",
-      "size": 101460
+      "sha256": "d4c82257b6fd7541003d7574d44a64fb3d2257bb3cb28cd42aec0c035a9bf64f",
+      "size": 101482
     },
     {
       "path": "codex-rs/core/src/client_tool_metadata_tests.rs",
@@ -1403,9 +1418,34 @@
       "size": 41626
     },
     {
+      "path": "codex-rs/http-client/src/connect_retry.rs",
+      "sha256": "da40053b9471196121fdbc0502775174804a5dafca0a0a79cef83a47319548cd",
+      "size": 2194
+    },
+    {
+      "path": "codex-rs/http-client/src/lib.rs",
+      "sha256": "864f29d7472b6ec9f05aaa6a143b1afd59d5b98feb7bb6ed3e5762323633f2ea",
+      "size": 4715
+    },
+    {
+      "path": "codex-rs/http-client/src/transport.rs",
+      "sha256": "762f49a156502cbfd324a09b98bf0ccbeefcd28dde84557b05b061fe3c566e90",
+      "size": 12531
+    },
+    {
+      "path": "codex-rs/http-client/tests/connect_retry.rs",
+      "sha256": "0be1649051fb766bc4f4e78a25ed109f48e2cd8bfd6eccb1ba4091cc10bc0be3",
+      "size": 13159
+    },
+    {
       "path": "codex-rs/login/Cargo.toml",
       "sha256": "fd43af11dde0f5f24407d26dcb7faf7262c048838475520408407ce476fa035a",
       "size": 2139
+    },
+    {
+      "path": "codex-rs/login/src/auth/default_client.rs",
+      "sha256": "73ca005958dd771642ea6faea95496e0ab5419b074c1cfba8bc305a0825b498a",
+      "size": 18919
     },
     {
       "path": "codex-rs/login/src/auth/manager.rs",

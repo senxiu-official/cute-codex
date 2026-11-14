@@ -8,6 +8,7 @@ use crate::RouteAwareClientPool;
 use crate::RouteAwareRequestError;
 use crate::client::HttpClient;
 use crate::client::HttpClientBackend;
+use crate::connect_retry::ConnectRetry;
 use crate::error::TransportError;
 use crate::request::Request;
 use crate::request::RequestBody;
@@ -21,6 +22,8 @@ use futures::stream::BoxStream;
 use http::HeaderMap;
 use http::Method;
 use http::StatusCode;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tracing::Level;
 use tracing::enabled;
 use tracing::trace;
@@ -47,6 +50,7 @@ pub trait HttpTransport: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct ReqwestTransport {
     client: TransportClient,
+    connect_retry: ConnectRetry,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +67,7 @@ impl ReqwestTransport {
     pub fn from_http_client(client: HttpClient) -> Self {
         Self {
             client: TransportClient::Fixed(client),
+            connect_retry: ConnectRetry::Disabled,
         }
     }
 
@@ -70,10 +75,36 @@ impl ReqwestTransport {
     pub fn from_route_aware_client_pool(client: RouteAwareClientPool) -> Self {
         Self {
             client: TransportClient::RouteAware(Box::new(client)),
+            connect_retry: ConnectRetry::Disabled,
         }
     }
 
+    /// Allows at most two retries for connection establishment failures only.
+    /// A lower provider budget, including zero, is preserved.
+    /// The supplied flag must track redirects in the underlying client's builder.
+    /// Redirected requests, HTTP statuses, ambiguous sends and response streams
+    /// are never retried. The flag remains sticky for this transport's lifetime.
+    pub fn with_connect_retries(
+        mut self,
+        redirect_observed: Arc<AtomicBool>,
+        max_retries: u64,
+    ) -> Self {
+        self.connect_retry = ConnectRetry::Enabled {
+            redirect_observed,
+            max_retries: max_retries.min(/*other*/ 2),
+        };
+        self
+    }
+
     async fn send(&self, req: Request) -> Result<HttpResponse, TransportError> {
+        if matches!(self.connect_retry, ConnectRetry::Disabled) {
+            return self.send_once(req).await;
+        }
+        let req = req.into_prepared().map_err(TransportError::Build)?;
+        self.connect_retry.run(|| self.send_once(req.clone())).await
+    }
+
+    async fn send_once(&self, req: Request) -> Result<HttpResponse, TransportError> {
         let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
 
         let Request {

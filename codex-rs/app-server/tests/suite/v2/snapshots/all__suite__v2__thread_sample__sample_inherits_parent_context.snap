@@ -16,8 +16,8 @@ Settings:
   stream: true
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=bf13940dee826ebd):
-        - namespace/functions; hash=028af59ad835936d
+00:additional_tools/developer (3; hash=a44bafcb6a958843):
+        - namespace/functions; hash=8f13e932a6bf03bd
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -25,7 +25,6 @@ Settings:
           - function/view_image
           - function/get_goal
           - function/create_goal
-          - function/update_goal
           - function/parent_tool
         - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
           - function/close_agent
@@ -46,7 +45,7 @@ Settings:
         - `r0` = `<SKILLS_ROOT>/.system`
         ### Available skills
         - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r0/imagegen/SKILL.md) [hash=dcbada3f7f876b5c]
-        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r0/openai-docs/SKILL.md) [hash=daf7d1f4fd2d2abe]
+        - openai-docs: API first-timers, Codex/Work Q&A. If the user already has an OpenAI API integration, skip...upplied text or data. (file: r0/openai-docs/SKILL.md) [hash=3bcb1206044c9862]
         - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r0/skill-creator/SKILL.md)
         - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r0/skill-installer/SKILL.md) [hash=d3eb4395bd8e52c5]
         </skills_instructions>
@@ -77,8 +76,8 @@ Settings:
 ## Window 2 (after request 2: input repeated)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (3; hash=bf13940dee826ebd):
-        - namespace/functions; hash=028af59ad835936d
+00:additional_tools/developer (3; hash=a44bafcb6a958843):
+        - namespace/functions; hash=8f13e932a6bf03bd
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -86,7 +85,6 @@ Settings: same as window 1
           - function/view_image
           - function/get_goal
           - function/create_goal
-          - function/update_goal
           - function/parent_tool
         - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
           - function/close_agent
@@ -107,7 +105,7 @@ Settings: same as window 1
         - `r0` = `<SKILLS_ROOT>/.system`
         ### Available skills
         - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r0/imagegen/SKILL.md) [hash=dcbada3f7f876b5c]
-        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r0/openai-docs/SKILL.md) [hash=daf7d1f4fd2d2abe]
+        - openai-docs: API first-timers, Codex/Work Q&A. If the user already has an OpenAI API integration, skip...upplied text or data. (file: r0/openai-docs/SKILL.md) [hash=3bcb1206044c9862]
         - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r0/skill-creator/SKILL.md)
         - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r0/skill-installer/SKILL.md) [hash=d3eb4395bd8e52c5]
         </skills_instructions>
@@ -137,8 +135,8 @@ Settings: same as window 1
 ## Window 3 (after request 3: input repeated)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=bf13940dee826ebd):
-        - namespace/functions; hash=028af59ad835936d
+00:additional_tools/developer (3; hash=a44bafcb6a958843):
+        - namespace/functions; hash=8f13e932a6bf03bd
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -146,7 +144,6 @@ Settings: same as window 1
           - function/view_image
           - function/get_goal
           - function/create_goal
-          - function/update_goal
           - function/parent_tool
         - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
           - function/close_agent
@@ -167,7 +164,7 @@ Settings: same as window 1
         - `r0` = `<SKILLS_ROOT>/.system`
         ### Available skills
         - imagegen: Generate or edit raster images when the task benefits from AI-created bitmap visuals such as...ctly in HTML/CSS/canvas. (file: r0/imagegen/SKILL.md) [hash=dcbada3f7f876b5c]
-        - openai-docs: Use for Codex models/pricing, scheduled tasks, skills, settings, setup, troubleshooting, ...merely mention Codex. (file: r0/openai-docs/SKILL.md) [hash=daf7d1f4fd2d2abe]
+        - openai-docs: API first-timers, Codex/Work Q&A. If the user already has an OpenAI API integration, skip...upplied text or data. (file: r0/openai-docs/SKILL.md) [hash=3bcb1206044c9862]
         - skill-creator: Create or update a Codex skill with appropriately scoped instructions and any needed supporting resources. (file: r0/skill-creator/SKILL.md)
         - skill-installer: Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo pat...g private repos). (file: r0/skill-installer/SKILL.md) [hash=d3eb4395bd8e52c5]
         </skills_instructions>

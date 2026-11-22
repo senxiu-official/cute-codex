@@ -41,8 +41,12 @@ impl Session {
     pub(crate) async fn submit_exclusive_external_input(
         self: &Arc<Self>,
         envelope: Envelope,
+        stop_answer: bool,
     ) -> Result<std::result::Result<ExclusiveAdmission, BusyReason>> {
         envelope.validate()?;
+        if stop_answer {
+            envelope.validate_stop_answer()?;
+        }
         ensure!(
             envelope.thread_id == self.thread_id.to_string(),
             "external input thread mismatch"
@@ -51,6 +55,24 @@ impl Session {
             envelope.message.delivery.is_active(),
             "exclusive admission requires an active delivery"
         );
+        // Exact replay reports its original turn even if admission is now
+        // blocked by Plan mode, a tool gate or server draining.
+        {
+            let state = self.external_input.lock().await;
+            let runtime = state
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("external input disabled"))?;
+            ensure!(
+                runtime.owner == envelope.owner_id && !runtime.poisoned,
+                "external input recovery required"
+            );
+            if let Some(known) = known_admission(runtime, &envelope) {
+                return Ok(Ok(known));
+            }
+        }
+        if stop_answer && self.tool_gate.is_held() {
+            return Ok(Err(BusyReason::ToolGate));
+        }
         // Same pre-checks as an automatic idle start, before reserving.
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             return Ok(Err(BusyReason::PendingTurnTrigger));
@@ -64,7 +86,7 @@ impl Session {
         let turn_id = Uuid::now_v7().to_string();
         let message_id = envelope.message.id.clone();
         let (status, turn_state) = match self
-            .reserve_exclusive_external_input(envelope, &turn_id)
+            .reserve_exclusive_external_input(envelope, &turn_id, stop_answer)
             .await?
         {
             Reservation::Known(known) => return Ok(Ok(known)),
@@ -111,6 +133,7 @@ impl Session {
         &self,
         envelope: Envelope,
         turn_id: &str,
+        stop_answer: bool,
     ) -> Result<Reservation> {
         let mut state = self.external_input.lock().await;
         let runtime = state
@@ -122,22 +145,8 @@ impl Session {
         );
         let id = envelope.message.id.clone();
         let digest = envelope.semantic_sha256.clone();
-        let found = snapshot(runtime, &id, &digest);
-        if found.delivery_state != DeliveryState::Unknown {
-            // Exact replay never starts a second turn.
-            let turn = found
-                .receipt
-                .as_ref()
-                .map(|receipt| receipt.turn_id.clone())
-                .or_else(|| {
-                    runtime
-                        .pending
-                        .iter()
-                        .find(|pending| pending.envelope.message.id == id)
-                        .and_then(|pending| pending.exclusive_turn.as_ref())
-                        .map(|turn| turn.id.clone())
-                });
-            return Ok(Reservation::Known((found, turn)));
+        if let Some(known) = known_admission(runtime, &envelope) {
+            return Ok(Reservation::Known(known));
         }
         ensure!(
             runtime.policy_blocked.is_empty(),
@@ -145,8 +154,16 @@ impl Session {
         );
         ExternalInputContext::new(&envelope, runtime.policy)?;
         ensure!(runtime.admission_load() < 100, "external input overloaded");
-        if runtime.paused {
+        let gate_blocks = if stop_answer {
+            !runtime.paused || !runtime.stopped
+        } else {
+            runtime.paused
+        };
+        if gate_blocks {
             return Ok(Reservation::Busy(BusyReason::GateClosed));
+        }
+        if stop_answer && self.tool_gate.is_held() {
+            return Ok(Reservation::Busy(BusyReason::ToolGate));
         }
         // Released committed obligations would be claimed by any next turn.
         if runtime
@@ -165,6 +182,10 @@ impl Session {
         let bound = ExclusiveTurn {
             id: turn_id.to_string(),
             state: Arc::clone(&turn_state),
+            stop_answer: stop_answer.then(|| codex_protocol::external_input_record::MessageKey {
+                message_id: id.clone(),
+                semantic_sha256: digest.clone(),
+            }),
         };
         runtime.pending.push(Pending {
             envelope,
@@ -204,4 +225,27 @@ impl Session {
             let _ = runtime.changed.send(id);
         }
     }
+}
+
+fn known_admission(
+    runtime: &crate::external_input::Runtime,
+    envelope: &Envelope,
+) -> Option<ExclusiveAdmission> {
+    let found = snapshot(runtime, &envelope.message.id, &envelope.semantic_sha256);
+    if found.delivery_state == DeliveryState::Unknown {
+        return None;
+    }
+    let turn = found
+        .receipt
+        .as_ref()
+        .map(|receipt| receipt.turn_id.clone())
+        .or_else(|| {
+            runtime
+                .pending
+                .iter()
+                .find(|pending| pending.envelope.message.id == envelope.message.id)
+                .and_then(|pending| pending.exclusive_turn.as_ref())
+                .map(|turn| turn.id.clone())
+        });
+    Some((found, turn))
 }

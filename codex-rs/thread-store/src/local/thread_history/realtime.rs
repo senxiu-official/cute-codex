@@ -71,6 +71,7 @@ pub(in crate::local) async fn list_timeline(
     let lineage = store
         .resolve_rollout_lineage_for_history_page(params.thread_id)
         .await?;
+    lineage.ensure_presentation_index(store).await?;
     super::super::presentation_history::validate(store, params.thread_id, &lineage).await?;
     let pool = store.thread_history_db().await?;
     let cursor = params

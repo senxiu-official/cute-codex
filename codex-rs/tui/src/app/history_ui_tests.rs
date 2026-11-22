@@ -38,6 +38,9 @@ async fn viewed_image_links_follow_workspace_locality() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("frame.png");
     image::RgbaImage::new(1, 1).save(&path)?;
+    // The local-image policy deliberately rejects reparse-point ancestors. This
+    // fixture tests workspace locality, so remove a possible TEMP junction first.
+    let path = path.canonicalize()?;
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
     let (mut app, _, _) = make_test_app_with_channels().await;
     let mut tui = crate::tui::test_support::make_test_tui()?;

@@ -102,10 +102,19 @@ pub struct InitializeResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub external_input_control_version: Option<u32>,
+    /// One launch-bound cutex-asks ANSWER turn through the owner-Stop gate,
+    /// without globally resuming ExternalInput. Absent on older servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_input_stop_answer: Option<u32>,
     /// Atomic owner input + canonical ExternalInput envelopes on turn/start and turn/steer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub owner_input_carries: Option<u32>,
+    /// Ordered original owner prefix plus carrier, admitted as one new turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub owner_input_batch: Option<u32>,
     /// cutex fork: `thread/toolGate/set` and `thread/toolGate/changed` on the
     /// bound receiver (agent pause at the next tool boundary). Absent on older
     /// servers.

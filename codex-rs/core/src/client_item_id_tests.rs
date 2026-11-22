@@ -174,10 +174,13 @@ async fn provider_item_id_projection_reaches_serialized_http_input() -> anyhow::
         .mount(&server)
         .await;
     let client = ModelClient::new(
-        /*auth_manager*/ None,
+        codex_model_provider::create_model_provider(
+            create_oss_provider_with_base_url(&server.uri(), WireApi::Responses),
+            /*auth_manager*/ None,
+        ),
         AgentIdentityAuthPolicy::JwtOnly,
         ThreadId::new(),
-        create_oss_provider_with_base_url(&server.uri(), WireApi::Responses),
+        uuid_v7_item_id_generator_for_test(),
         SessionSource::Cli,
         "test_originator".into(),
         /*model_verbosity*/ None,

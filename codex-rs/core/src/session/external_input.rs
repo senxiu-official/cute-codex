@@ -179,6 +179,7 @@ impl Session {
             pending: Vec::new(),
             owner_carries: BTreeMap::new(),
             paused: restored.paused,
+            stopped: false,
             poisoned: false,
             retries,
             permits: restored.permits,
@@ -317,7 +318,7 @@ impl Session {
         ordered.sort_unstable_by_key(|(_, found)| found.commit.receipt.ordinal);
         for (id, found) in ordered {
             if !matches!(found.processing, Processing::Pending(_))
-                || (runtime.paused && !runtime.permits.contains(id))
+                || !runtime.processing_allowed(id, current_turn.as_ref())
                 || runtime
                     .retry_exclusions
                     .get(id)
@@ -339,8 +340,20 @@ impl Session {
         let mut index = 0;
         // A retry permit belongs to an existing A4 item above. It never
         // authorizes new admission-to-context, including passive messages.
-        while !runtime.paused && index < runtime.pending.len() {
+        while index < runtime.pending.len() {
             let pending = &runtime.pending[index];
+            if runtime.paused
+                && !(runtime.stopped
+                    && runtime
+                        .stop_answer_key(current_turn.as_ref())
+                        .is_some_and(|key| {
+                            key.message_id == pending.envelope.message.id
+                                && key.semantic_sha256 == pending.envelope.semantic_sha256
+                        }))
+            {
+                index += 1;
+                continue;
+            }
             if runtime.excluded_by_exclusive_turn(pending, current_turn.as_ref()) {
                 index += 1;
                 continue;
@@ -580,6 +593,7 @@ impl Session {
                     id: turn.sub_id.clone(),
                     msg: codex_protocol::protocol::EventMsg::ItemCompleted(
                         codex_protocol::protocol::ItemCompletedEvent {
+                            content_token_count: None,
                             thread_id: self.thread_id,
                             turn_id: turn.sub_id.clone(),
                             item: codex_protocol::items::TurnItem::FunctionCallOutput(
@@ -609,6 +623,12 @@ impl Session {
 }
 
 pub(super) fn snapshot(runtime: &Runtime, id: &str, digest: &str) -> Status {
+    let stop_answer = runtime.stopped
+        && runtime
+            .exclusive_turn
+            .as_ref()
+            .and_then(|turn| turn.stop_answer.as_ref())
+            .is_some_and(|key| key.message_id == id && key.semantic_sha256 == digest);
     let mut status = Status {
         message_id: id.into(),
         semantic_sha256: digest.into(),
@@ -634,6 +654,7 @@ pub(super) fn snapshot(runtime: &Runtime, id: &str, digest: &str) -> Status {
             (&Processing::Held(attempt, HoldReason::CanonicalSizePolicy)).into()
         } else if runtime.paused
             && !runtime.permits.contains(id)
+            && !stop_answer
             && let Processing::Pending(attempt) = found.processing
         {
             (&Processing::Held(attempt, HoldReason::Interrupted)).into()
@@ -651,7 +672,7 @@ pub(super) fn snapshot(runtime: &Runtime, id: &str, digest: &str) -> Status {
             DeliveryState::Conflict
         };
         if found.envelope.message.delivery.is_active() {
-            status.processing = if runtime.paused {
+            status.processing = if runtime.paused && !stop_answer {
                 (&Processing::Held(None, HoldReason::Interrupted)).into()
             } else {
                 (&Processing::Pending(None)).into()

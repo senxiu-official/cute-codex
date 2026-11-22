@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use super::footer_content::FooterContent;
 use codex_protocol::ThreadId;
 
-use super::status_line_content::StatusLineRenderer;
 use super::status_line_setup::StatusLineItem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -189,7 +188,6 @@ struct PreviewValue {
 pub(crate) struct StatusSurfacePreviewData {
     pub(crate) notification_style: Option<ratatui::style::Style>,
     pub(crate) thread_id: Option<ThreadId>,
-    pub(crate) renderer: StatusLineRenderer,
     pub(crate) pull_request_url: Option<String>,
     values: BTreeMap<StatusSurfacePreviewItem, PreviewValue>,
 }
@@ -198,7 +196,6 @@ impl Default for StatusSurfacePreviewData {
     fn default() -> Self {
         let mut data = Self {
             thread_id: None,
-            renderer: StatusLineRenderer::Native,
             pull_request_url: None,
             values: BTreeMap::new(),
             notification_style: None,
@@ -344,14 +341,6 @@ impl StatusSurfacePreviewData {
         let pull_request_url = self
             .live_value_for(StatusSurfacePreviewItem::PullRequestNumber)
             .and(self.pull_request_url.as_deref());
-        if self.renderer == StatusLineRenderer::Extension {
-            return self.renderer.content(
-                segments,
-                use_theme_colors,
-                self.thread_id,
-                pull_request_url,
-            );
-        }
         let pull_request_text = segments
             .iter()
             .find(|(item, _)| *item == StatusLineItem::PullRequestNumber)

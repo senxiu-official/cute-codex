@@ -120,6 +120,10 @@ impl ToolGate {
         self.state.borrow().clone()
     }
 
+    pub(crate) fn is_held(&self) -> bool {
+        self.effective().borrow().held
+    }
+
     pub(crate) fn subscribe(&self) -> watch::Receiver<ToolGateState> {
         self.state.subscribe()
     }

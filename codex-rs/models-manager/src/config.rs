@@ -5,6 +5,8 @@ use codex_protocol::openai_models::ModelsResponse;
 pub struct ModelsManagerConfig {
     pub model_context_window: Option<i64>,
     pub model_auto_compact_token_limit: Option<i64>,
+    pub model_context_settings_v1: bool,
+    pub model_auto_compact_percent: Option<u8>,
     pub tool_output_token_limit: Option<usize>,
     pub base_instructions: Option<String>,
     pub personality: Option<Personality>,

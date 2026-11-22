@@ -14,6 +14,7 @@ mod abort_tests;
 
 fn message(id: &str) -> TurnItem {
     TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: id.into(),
         content: vec![],
         phase: None,

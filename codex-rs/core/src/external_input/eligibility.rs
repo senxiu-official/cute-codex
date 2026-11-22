@@ -52,7 +52,7 @@ impl Runtime {
                 && self.recovery.messages.iter().any(|(id, found)| {
                     found.commit.envelope.message.delivery == Delivery::Soon
                         && matches!(found.processing, Processing::Pending(_))
-                        && (!self.paused || self.permits.contains(id))
+                        && self.processing_allowed(id, Some(&boundary.current))
                         && !self
                             .retry_exclusions
                             .get(id)

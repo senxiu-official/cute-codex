@@ -121,6 +121,46 @@ fn warning_notice_keeps_two_status_rows_and_shares_the_bottom_passive_row() {
 }
 
 #[test]
+fn warning_notice_uses_hints_when_two_status_rows_are_disabled_or_clipped() {
+    let mut composer = composer();
+    composer.set_status_line_rows(vec![
+        Line::from("first status row").into(),
+        Line::from("second status row").into(),
+    ]);
+    for enabled in [false, true] {
+        composer.set_status_line_enabled(enabled);
+        let options = composer.resolve_render_options(ComposerRenderOptions {
+            warning_count: 1,
+            ..Default::default()
+        });
+        let area = Rect::new(0, 0, 80, 5);
+        let mut buffer = Buffer::empty(area);
+        composer.render_with_options(area, &mut buffer, None, options);
+        let rows = buffer
+            .content
+            .chunks(80)
+            .map(|row| {
+                row.iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        let warnings = rows
+            .iter()
+            .filter(|row| row.contains("1 warning"))
+            .collect::<Vec<_>>();
+        assert_eq!(warnings.len(), 1);
+        assert!(!warnings[0].contains("first status row"));
+        assert_eq!(
+            rows.iter().any(|row| row.contains("first status row")),
+            enabled
+        );
+        assert!(!rows.iter().any(|row| row.contains("second status row")));
+        assert!(composer.cursor_pos_with_options(area, options).is_some());
+    }
+}
+
+#[test]
 fn warning_notice_styles() {
     let mut composer = composer();
     composer.set_text_content("keep this draft".into(), Vec::new(), Vec::new());
@@ -171,7 +211,10 @@ fn warning_notice_respects_shortcuts_and_interactive_hints() {
     composer.footer.show_warnings_key = Some(crate::key_hint::plain(KeyCode::F(12)).into());
     assert!(text(&render(&composer, /*width*/ 64, /*count*/ 2)).contains("f12 to view"));
     composer.footer.show_warnings_key = None;
-    assert!(text(&render(&composer, /*width*/ 64, /*count*/ 2)).contains("⚠ 2 · /warnings"));
+    assert!(
+        text(&render(&composer, /*width*/ 64, /*count*/ 2))
+            .contains("⚠ 2 warnings · /warnings to view")
+    );
     let interactive = TranscriptFooter {
         text: Line::from("Find: needle").into(),
         cursor_column: Some(6),

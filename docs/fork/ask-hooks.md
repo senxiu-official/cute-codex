@@ -15,6 +15,9 @@ an ExternalInput launch binding. Older servers omit the field. Version 1 means:
 - `thread/externalInput/resume`;
 - `thread/externalInput/interrupt`.
 
+`externalInputStopAnswer: 1` separately advertises `admission: "stop_answer"`.
+Clients must check this capability before using the additional admission mode.
+
 Older servers reject `admission` as an unknown field (`deny_unknown_fields`),
 so a client that sends it without checking the capability fails loudly.
 
@@ -249,3 +252,59 @@ and a receipt always names the bound turn. N1 is therefore required (P1).
   nothing; boundary predicates; release), `core/tests/suite/external_input_exclusive.rs`
   (end to end on a bound, resumed thread with a mock model),
   `app-server-protocol` serde tests for the new params.
+
+
+## One ANSWER turn after owner Stop
+
+With `externalInputStopAnswer: 1`, `thread/externalInput/submit` accepts
+`admission: "stop_answer"`. This mode itself implies exclusive admission; no
+second admission field is sent. It requires all of:
+
+- the existing trusted launch binding (owner, thread, runtime generation);
+- a validated envelope, including message ID and semantic SHA256;
+- `message.source = {"kind":"service","id":"cutex-asks"}`;
+- `message.type = "ANSWER"` and active delivery (`after_turn` or `soon`);
+- the ExternalInput gate closed by owner Stop in this runtime process.
+
+The ANSWER reserves one turn and consumes only that exact bound message.
+Other pending active and passive inputs stay queued, including inputs arriving
+while the ANSWER runs. Its context pair and processing claim still use the
+normal durable ledger. The gate is never reopened, before, during or after this
+turn, and no additional automatic turn is dispatched on completion.
+
+The normal blockers remain: an active/reserved turn, native turn-trigger
+mailbox input, a released committed obligation, Plan mode, host draining, and
+the effective tool gate (including an ancestor's gate). A held tool gate returns
+the existing busy shape with `reason: "tool_gate"`. A gate that is open or was
+closed by ordinary pause returns `gate_closed`. Refusal queues nothing.
+
+Stop provenance is volatile. Restoring a closed gate after runtime restart
+keeps it closed with no stop_answer permission; the owner explicitly resends
+or discards work. Stop does not promote an existing ordinary/restored pause.
+Calling the ordinary pause API after Stop revokes the permission. This adds no
+ledger facts or enum variants, preserving old Native pins' history parsing.
+
+Only the explicit owner/client `turn/interrupt` request stamps Stop provenance
+on Core's private submission. An ordinary `Op::Interrupt`, a parent interrupting
+a child, automatic interruption after invalid permission paths, and Abort on a
+patch approval close the gate without granting stop_answer (and revoke any
+earlier Stop permission).
+
+An exact replay returns the original known status/turn and, once persisted,
+the original receipt; it never starts another turn, even if a new admission
+blocker is present. An unconsumed admission cancelled before its durable pair
+returns to unknown, as with exclusive_turn. Launch-binding and envelope/source
+validation apply to replays too. Service/type fields are supplied only by the
+trusted launch client: Native does not infer ANSWER authority from model text.
+
+An ANSWER submitted with ordinary queue admission before Stop already has a
+known identity. Replaying it with stop_answer returns that known held status
+with no `turnId`; it does not promote the queued item into a new turn. Cutex
+must interpret **no turn + held** as needing an explicit owner resume or resend.
+Repeating the same stop_answer submission cannot make that queued item run.
+
+Named `turn/interrupt` requests against an idle thread, including a turn already
+interrupted by owner Stop, promptly return the definite JSON-RPC error `-32600`,
+`no active turn to interrupt`. Retained interrupted display history is not an
+active turn. This refusal does not submit another owner Stop or change its
+provenance; empty-turn startup interruption retains its existing semantics.

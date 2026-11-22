@@ -13,6 +13,7 @@ async fn inbound_presentation_live_replay_identity_and_plain_body() {
             turn_id: "turn".into(),
             item: codex_app_server_protocol::ThreadItem::untimed(item.clone()),
             completed_at_ms: 1,
+            content_token_count: None,
         },
     );
     chat.handle_server_notification(notification.clone(), None);

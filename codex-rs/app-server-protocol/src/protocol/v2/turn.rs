@@ -43,7 +43,9 @@ pub enum TurnStatus {
 /// Unsupported fields are rejected rather than silently ignored.
 /// Any live task kind may accept publication. Child sessions and consumers of
 /// frozen initial settings are unchanged.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[derive(
+    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
+)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(export_to = "v2/")]
 pub struct TurnSettingsUpdateParams {
@@ -53,6 +55,11 @@ pub struct TurnSettingsUpdateParams {
     /// Already captured steps and pending approvals retain their original reviewer.
     #[ts(optional = nullable)]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Replace the environments for subsequent steps of this turn, not future turns.
+    /// Omitted/null preserves the selection; [] clears it. An already-started step is unchanged.
+    #[experimental("turn/settings/update.environments")]
+    #[ts(optional = nullable)]
+    pub environments: Option<Vec<TurnEnvironmentParams>>,
     /// Omission or `null` leaves the model unchanged.
     #[ts(optional = nullable)]
     pub model: Option<String>,
@@ -180,6 +187,16 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
+    /// Ordered owner prefix, excluding the ordinary carrier. Even [] requests
+    /// ownerInputBatch v1: one idle turn containing every original identity.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_owner_inputs"
+    )]
+    #[ts(optional)]
+    #[schemars(with = "Vec<OwnerInput>")]
+    pub owner_inputs: Option<Vec<OwnerInput>>,
     /// Canonical external items consumed only with this owner input. Never pre-submit these.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -473,6 +490,69 @@ pub enum AudioReference {
         #[ts(rename = "fileId")]
         file_id: String,
     },
+}
+
+/// One original owner identity in a turn/start prefix.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export_to = "v2/")]
+pub struct OwnerInput {
+    pub client_user_message_id: String,
+    pub input: Vec<UserInput>,
+}
+
+fn deserialize_owner_inputs<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<OwnerInput>>, D::Error> {
+    Vec::<OwnerInput>::deserialize(deserializer).map(Some)
+}
+
+impl TurnStartParams {
+    /// Validate the entire batch before any mutable thread operation.
+    pub fn validate_owner_input_batch(&self) -> Result<(), String> {
+        let Some(prefix) = &self.owner_inputs else {
+            return Ok(());
+        };
+        if prefix.len() >= 100
+            || self.tool_output.is_some()
+            || self
+                .owner_carries
+                .as_ref()
+                .is_some_and(|items| !items.is_empty())
+        {
+            return Err("ownerInputs requires at most 100 owner IDs and cannot combine with toolOutput or ownerCarries".into());
+        }
+        let carrier_id = self
+            .client_user_message_id
+            .as_deref()
+            .ok_or("ownerInputs requires a carrier clientUserMessageId")?;
+        let mut ids = std::collections::BTreeSet::new();
+        for (id, input) in prefix
+            .iter()
+            .map(|item| (item.client_user_message_id.as_str(), &item.input))
+            .chain(std::iter::once((carrier_id, &self.input)))
+        {
+            if id.is_empty() || id.len() > 256 || !ids.insert(id) || input.is_empty() {
+                return Err("ownerInputs requires unique nonempty IDs (at most 256 UTF-8 bytes) and nonempty input".into());
+            }
+            if input
+                .iter()
+                .any(|part| matches!(part, UserInput::Audio { .. } | UserInput::LocalAudio { .. }))
+            {
+                return Err("ownerInputBatch v1 does not support audio".into());
+            }
+        }
+        let mut items = prefix.clone();
+        items.push(OwnerInput {
+            client_user_message_id: carrier_id.to_owned(),
+            input: self.input.clone(),
+        });
+        let bytes = serde_json::to_vec(&items).map_err(|error| error.to_string())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("ownerInputs prefix and carrier exceed 1 MiB".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

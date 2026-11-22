@@ -178,6 +178,19 @@ impl ExternalInputRequestProcessor {
         Ok(())
     }
 
+    pub(crate) async fn validate_owner_input_batch(
+        &self,
+        thread_id: &str,
+    ) -> Result<(), JSONRPCErrorError> {
+        let binding = self
+            .binding
+            .as_ref()
+            .ok_or_else(|| invalid_request("ownerInputBatch capability disabled"))?;
+        self.require_thread(1, &binding.owner_id, thread_id, binding.runtime_generation)
+            .await?;
+        Ok(())
+    }
+
     pub(crate) async fn submit(
         &self,
         params: ExternalInputSubmitParams,
@@ -187,6 +200,9 @@ impl ExternalInputRequestProcessor {
         envelope
             .validate()
             .map_err(|error| invalid_request(error.to_string()))?;
+        if admission == ExternalInputAdmission::StopAnswer {
+            validate_stop_answer(self.binding.as_ref(), &envelope)?;
+        }
         if admission == ExternalInputAdmission::ExclusiveTurn
             && !envelope.message.delivery.is_active()
         {
@@ -212,6 +228,11 @@ impl ExternalInputRequestProcessor {
             ),
             ExternalInputAdmission::ExclusiveTurn => thread
                 .submit_external_input_exclusive(envelope.clone())
+                .await
+                .map_err(|error| internal_error(error.to_string()))?
+                .map_err(busy_error)?,
+            ExternalInputAdmission::StopAnswer => thread
+                .submit_external_input_stop_answer(envelope.clone())
                 .await
                 .map_err(|error| internal_error(error.to_string()))?
                 .map_err(busy_error)?,
@@ -431,6 +452,28 @@ fn validate_owner_carry(
     Ok(())
 }
 
+fn validate_stop_answer(
+    binding: Option<&ExternalInputBinding>,
+    envelope: &Envelope,
+) -> Result<(), JSONRPCErrorError> {
+    let binding = binding.ok_or_else(|| invalid_request("ExternalInput capability disabled"))?;
+    if binding.version != 1 {
+        return Err(invalid_request("ExternalInput launch binding mismatch"));
+    }
+    envelope
+        .validate_binding(
+            &binding.owner_id,
+            &binding.thread_id,
+            binding.runtime_generation,
+        )
+        .map_err(|error| invalid_request(error.to_string()))?;
+    // Core checks canonical byte policy only for new admission, after replay
+    // lookup, so a stricter launch policy does not hide a historical receipt.
+    envelope
+        .validate_stop_answer()
+        .map_err(|error| invalid_request(error.to_string()))
+}
+
 /// `data.externalInputError` value of a refused exclusive admission.
 pub(crate) const EXTERNAL_INPUT_BUSY_ERROR: &str = "busy";
 
@@ -465,6 +508,65 @@ fn validate_key(key: &MessageKey) -> Result<(), JSONRPCErrorError> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn stop_answer_requires_service_answer_and_exact_launch_and_digest_binding() {
+        let binding = ExternalInputBinding {
+            version: 1,
+            owner_id: "owner".into(),
+            thread_id: "thread".into(),
+            runtime_generation: 7,
+            canonical_byte_limit: Default::default(),
+        };
+        let mut answer = owner_envelope();
+        answer.message.source.id = "cutex-asks".into();
+        answer.message.event_type = "ANSWER".into();
+        answer.semantic_sha256 = answer.digest();
+        validate_stop_answer(Some(&binding), &answer).unwrap();
+        assert!(validate_stop_answer(None, &answer).is_err());
+        for field in [
+            "owner",
+            "thread",
+            "generation",
+            "id",
+            "digest",
+            "text",
+            "service",
+            "kind",
+            "type",
+            "passive",
+        ] {
+            let mut bad = answer.clone();
+            match field {
+                "owner" => bad.owner_id = "other".into(),
+                "thread" => bad.thread_id = "other".into(),
+                "generation" => bad.runtime_generation += 1,
+                "id" => bad.message.id = "other".into(),
+                "digest" => bad.semantic_sha256 = "0".repeat(64),
+                "text" => bad.message.text.push_str("changed"),
+                "service" => bad.message.source.id = "other".into(),
+                "kind" => {
+                    bad.message.source.kind = codex_protocol::external_input::SourceKind::Agent
+                }
+                "type" => bad.message.event_type = "ASK".into(),
+                "passive" => {
+                    bad.message.delivery = codex_protocol::external_input::Delivery::Passive
+                }
+                _ => unreachable!(),
+            }
+            // Binding and allowed-source checks must reject even correctly hashed envelopes.
+            if matches!(
+                field,
+                "owner" | "thread" | "service" | "kind" | "type" | "passive"
+            ) {
+                bad.semantic_sha256 = bad.digest();
+            }
+            assert!(
+                validate_stop_answer(Some(&binding), &bad).is_err(),
+                "{field}"
+            );
+        }
+    }
 
     fn owner_envelope() -> Envelope {
         use codex_protocol::external_input::Delivery;

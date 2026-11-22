@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use codex_prompts::render_review_exit_interrupted;
 use codex_prompts::render_review_exit_success;
-use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::ExitedReviewModeItem;
 use codex_protocol::items::TurnItem;
@@ -14,6 +13,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::review_format::format_review_findings_block;
@@ -156,10 +156,14 @@ async fn process_review_events(
                 }
                 prev_agent_message = Some(event);
             }
-            // Suppress ItemCompleted only for assistant messages: forwarding it
-            // would trigger legacy AgentMessage via as_legacy_events(), which this
-            // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent {
+            // Keep the hidden assistant lifecycle out of the parent's open-text
+            // tracker; otherwise its terminal fence would complete the suppressed
+            // review message again alongside the rendered structured result.
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::AgentMessage(_),
+                ..
+            })
+            | EventMsg::ItemCompleted(ItemCompletedEvent {
                 item: TurnItem::AgentMessage(_),
                 ..
             })
@@ -242,7 +246,7 @@ pub(crate) async fn exit_review_mode(
             &[ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some(ResponseItemId::new("msg")),
+                id: Some((session.item_id_generator)("msg")),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
                 phase: None,
@@ -264,7 +268,7 @@ pub(crate) async fn exit_review_mode(
             ResponseItem::Message {
                 status: None,
                 encrypted_content: None,
-                id: Some(ResponseItemId::new("msg")),
+                id: Some((session.item_id_generator)("msg")),
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
                     annotations: None,

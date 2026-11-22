@@ -58,12 +58,25 @@ async fn choose_astra(
     while let Ok(event) = events.try_recv() {
         if matches!(
             &event,
-            AppEvent::UpdateModel(_)
+            AppEvent::ScopedModelPicker { .. }
+                | AppEvent::UpdateModel(_)
                 | AppEvent::ApplyModelSelection { .. }
                 | AppEvent::SelectSessionModel { .. }
                 | AppEvent::AstraSelectedFromModelPicker { .. }
         ) {
-            if let AppEvent::AstraSelectedFromModelPicker { thread_id, .. } = &event {
+            let selection = match &event {
+                AppEvent::ScopedModelPicker {
+                    backend,
+                    thread_id,
+                    event,
+                } => {
+                    assert_eq!(*backend, server.backend_id());
+                    assert_eq!(*thread_id, app.chat_widget.thread_id());
+                    event.as_ref()
+                }
+                event => event,
+            };
+            if let AppEvent::AstraSelectedFromModelPicker { thread_id, .. } = selection {
                 assert_eq!(Some(*thread_id), app.chat_widget.thread_id());
             }
             app.handle_event(tui, server, event).await?;
@@ -167,11 +180,21 @@ fn astra_picker_confirms_and_restores_the_sparkle() -> Result<()> {
                     app.local_settings.tui.animations = true;
                     app.local_settings.tui.effects.starfield = true;
                     app.local_settings.tui.disable_paste_burst = Some(true);
+                    app.config.model = Some("gpt-5.5".into());
                     let mut server = start_config_write_test_app_server(&app).await?;
+                    // Model changes now wait for the server's settings acknowledgement;
+                    // a synthetic thread ID cannot participate in this picker flow.
+                    let thread = server.start_thread(&app.config).await?;
+                    app.model_catalog = std::sync::Arc::new(
+                        app.model_catalog
+                            .as_ref()
+                            .clone()
+                            .for_backend(server.backend_id(), &mut app.provider_writes),
+                    );
                     let mut tui = crate::tui::test_support::make_test_tui()?;
                     app.replace_chat_widget_with_app_server_thread(
                         &mut tui,
-                        started("gpt-5.5"),
+                        thread,
                         ThreadAttachPresentation::Fresh,
                         /*initial_user_message*/ None,
                     )

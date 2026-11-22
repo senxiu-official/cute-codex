@@ -38,6 +38,10 @@ pub enum ExternalInputAdmission {
     /// turn consumes this item, passive input, and no other active item.
     /// Requires an active delivery.
     ExclusiveTurn,
+    /// Exclusive admission of an active cutex-asks service ANSWER through only
+    /// the current process's owner-Stop gate. Leaves the gate closed and takes
+    /// no other queued input. Requires externalInputStopAnswer: 1.
+    StopAnswer,
 }
 
 impl From<ExternalInputSubmitParams> for Envelope {
@@ -76,7 +80,7 @@ pub struct ExternalInputResponse {
     pub thread_id: String,
     pub runtime_generation: u64,
     pub statuses: Vec<Status>,
-    /// `exclusive_turn` submit only: the turn that carries this item. The
+    /// Dedicated admission (`exclusive_turn` or `stop_answer`): the turn that carries this item. The
     /// receipt, once context is persisted, carries the same turn id; if the
     /// turn ends first, the item is dropped and its status becomes `unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,6 +265,9 @@ mod tests {
             exclusive.admission,
             Some(ExternalInputAdmission::ExclusiveTurn)
         );
+        let answer: ExternalInputSubmitParams =
+            serde_json::from_value(submit(Some("stop_answer"))).unwrap();
+        assert_eq!(answer.admission, Some(ExternalInputAdmission::StopAnswer));
         assert_eq!(
             Envelope::from(exclusive),
             Envelope::from(queued),
@@ -288,6 +295,25 @@ mod tests {
         started["turnId"] = json!("turn-1");
         let parsed: ExternalInputResponse = serde_json::from_value(started).unwrap();
         assert_eq!(parsed.turn_id.as_deref(), Some("turn-1"));
+    }
+
+    #[test]
+    fn stop_answer_initialize_is_an_optional_top_level_numeric_capability() {
+        let mut response: crate::InitializeResponse = serde_json::from_value(json!({
+            "userAgent": "test", "codexHome": std::env::current_dir().unwrap(),
+            "platformFamily": "test", "platformOs": "test"
+        }))
+        .unwrap();
+        assert!(
+            serde_json::to_value(&response)
+                .unwrap()
+                .get("externalInputStopAnswer")
+                .is_none()
+        );
+        response.external_input_stop_answer = Some(1);
+        let response = serde_json::to_value(response).unwrap();
+        assert_eq!(response["externalInputStopAnswer"], json!(1));
+        assert!(response.get("capabilities").is_none());
     }
 
     #[test]

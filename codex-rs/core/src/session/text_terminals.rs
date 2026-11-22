@@ -147,6 +147,7 @@ impl Session {
                         thread_id: self.thread_id,
                         turn_id: turn.sub_id.clone(),
                         item,
+                        content_token_count: None,
                         started_at_ms,
                         completed_at_ms,
                     }),

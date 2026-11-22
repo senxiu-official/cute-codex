@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::bottom_pane::footer_content::FooterContent;
-use crate::bottom_pane::status_line_content::StatusLineRenderer;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
@@ -209,25 +208,6 @@ impl ChatWidget {
             .any(|i| *i != StatusLineItem::CutexNewline);
         self.bottom_pane.set_status_line_enabled(enabled);
         let pull_request_url = self.status_line_pull_request_url().map(str::to_owned);
-        if self.status_line_renderer() == StatusLineRenderer::Extension {
-            let segments: Vec<_> = selections
-                .status_line_items
-                .iter()
-                .filter(|item| **item != StatusLineItem::CutexNewline)
-                .filter_map(|item| {
-                    self.status_line_value_for_item(*item)
-                        .map(|value| (*item, crate::cutex_status_presentation::text(*item, value)))
-                })
-                .collect();
-            let content = StatusLineRenderer::Extension.content(
-                segments,
-                self.local_settings.tui.status_line_use_colors,
-                self.thread_id,
-                pull_request_url.as_deref(),
-            );
-            self.set_status_line(content);
-            return;
-        }
         let mut rows = Vec::new();
         let mut next_frame = None;
         for group in
@@ -277,18 +257,6 @@ impl ChatWidget {
             self.set_status_line(rows.pop());
         } else {
             self.bottom_pane.set_status_line_rows(rows);
-        }
-    }
-
-    pub(super) fn status_line_renderer(&self) -> StatusLineRenderer {
-        if self
-            .config
-            .features
-            .enabled(Feature::TuiExtensionsStatusLine)
-        {
-            StatusLineRenderer::Extension
-        } else {
-            StatusLineRenderer::Native
         }
     }
 
@@ -392,7 +360,6 @@ impl ChatWidget {
             ProgramStatus::Blocked(kind)
         } else if self.bottom_pane.is_task_running()
             || self.is_user_turn_pending_or_running()
-            || !self.unified_exec_processes.is_empty()
             || (self.status_state.program_status_after_turn == ProgramStatus::Done
                 && self
                     .current_goal_status

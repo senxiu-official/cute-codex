@@ -153,6 +153,7 @@ async fn forward_ops_preserves_submission_trace_context() {
     let submission = Submission {
         id: "sub-1".to_string(),
         op: Op::Interrupt,
+        owner_stop: false,
         turn_extension_init: None,
         trace: Some(codex_protocol::protocol::W3cTraceContext {
             traceparent: Some(
@@ -174,6 +175,10 @@ async fn forward_ops_preserves_submission_trace_context() {
         .expect("forwarded submission missing");
     assert_eq!("sub-1", forwarded.id);
     assert!(matches!(forwarded.op, Op::Interrupt));
+    assert!(
+        !forwarded.owner_stop,
+        "internal forwarding is not owner Stop"
+    );
     assert_eq!(
         forwarded.trace,
         Some(codex_protocol::protocol::W3cTraceContext {
@@ -262,11 +267,7 @@ async fn delegate_start_analytics_honors_child_opt_out_with_enabled_parent() {
         .services
         .analytics_events_client = client.clone();
     parent_session
-        .set_app_server_client_info(
-            Some("codex-test".to_string()),
-            Some("1.0.0".to_string()),
-            /*mcp_elicitations_auto_deny*/ false,
-        )
+        .set_app_server_client_info(Some("codex-test".to_string()), Some("1.0.0".to_string()))
         .await
         .expect("set parent client metadata");
 

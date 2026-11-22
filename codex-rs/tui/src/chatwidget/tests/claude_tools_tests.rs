@@ -36,6 +36,7 @@ async fn claude_search_renders_live_and_replayed_without_executing_a_tool() {
                     turn_id: "turn".into(),
                     item: item("completed"),
                     completed_at_ms: 0,
+                    content_token_count: None,
                 }),
                 None,
             );

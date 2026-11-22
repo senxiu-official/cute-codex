@@ -103,7 +103,7 @@ fn error(value: impl std::fmt::Display) -> ThreadStoreError {
 #[derive(PartialEq, Eq)]
 pub(super) struct ValidationStamp {
     thread_id: codex_protocol::ThreadId,
-    lineage: super::rollout_lineage::RolloutLineage,
+    lineage: Vec<super::rollout_lineage::RolloutLineageSegment>,
     files: Vec<(u64, std::time::SystemTime)>,
 }
 
@@ -121,7 +121,7 @@ pub(super) async fn validate(
     }
     let stamp = ValidationStamp {
         thread_id,
-        lineage: lineage.clone(),
+        lineage: lineage.segments().to_vec(),
         files,
     };
     if store.presentation_validation.lock().await.as_ref() == Some(&stamp) {

@@ -3,6 +3,7 @@
 //! Spawn and reload share live runtime policy; role and model precedence, full-history
 //! inheritance, and validation messages remain the same for each multi-agent version.
 
+use crate::agent::host::AgentRuntimeServices;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
@@ -69,6 +70,14 @@ pub(crate) async fn prepare_agent_spawn_config(
         options.reasoning_effort,
     )
     .await?;
+    let shares_service_tier = match &session.agent_runtime {
+        AgentRuntimeServices::Controller => true,
+        AgentRuntimeServices::Host(services) => services.service_tier.is_some(),
+    };
+    if !shares_service_tier {
+        // Inherit the parent's thread preference before applying child role overrides.
+        config.service_tier = session.thread_settings_snapshot().await.service_tier;
+    }
     if !options.full_history_fork
         || (options.version == SpawnConfigVersion::V2 && options.role_name.is_some())
     {
@@ -82,7 +91,9 @@ pub(crate) async fn prepare_agent_spawn_config(
                 .clone_from(&turn.developer_instructions);
         }
     }
-    apply_spawn_agent_service_tier(session, &mut config).await?;
+    if shares_service_tier {
+        apply_spawn_agent_service_tier(session, &mut config).await?;
+    }
     apply_spawn_agent_runtime_overrides(&mut config, turn)?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
@@ -136,6 +147,7 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, String> {
     if config
         .features
         .enabled(Feature::SubagentDefaultContextLimits)
+        && !config.model_context_settings_v1
     {
         config.model_context_window = None;
         config.model_auto_compact_token_limit = None;
@@ -143,6 +155,12 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, String> {
     // Preserve activation for history forks without freezing the parent's model-owned prompts.
     // Fresh child startup restores configured preferences from the retained snapshot.
     config.token_budget = turn.configured_token_budget.clone();
+    if let Some(thread_namespaces) = &turn.overridden_direct_only_tool_namespaces {
+        config
+            .code_mode
+            .direct_only_tool_namespaces
+            .clone_from(thread_namespaces);
+    }
     config.model = Some(turn.model_info().slug.clone());
     config.model_provider = turn.provider.info().clone();
     config.model_reasoning_effort = turn
@@ -265,7 +283,9 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
 ) -> Result<(), String> {
-    let Some(service_tier) = session.services.agent_control.service_tier() else {
+    let Some(service_tier) =
+        crate::agent::host::service_tier(session, config.service_tier.clone()).await
+    else {
         config.service_tier = None;
         return Ok(());
     };
@@ -371,4 +391,99 @@ fn validate_spawn_agent_reasoning_effort(
     Err(format!(
         "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_context_v1_children_keep_profile_fallback_despite_default_limit_feature() {
+        let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+        for (enabled, absolute, percent) in [
+            (false, Some(400_000), None),
+            (true, Some(400_000), None),
+            (true, None, Some(75)),
+        ] {
+            let mut config = (*turn.config).clone();
+            config
+                .features
+                .enable(Feature::SubagentDefaultContextLimits)
+                .unwrap();
+            config.model_context_settings_v1 = enabled;
+            config.model_context_window = Some(500_000);
+            config.model_auto_compact_token_limit = absolute;
+            config.model_auto_compact_percent = percent;
+            turn.config = std::sync::Arc::new(config);
+            let child = build_agent_shared_config(&turn).unwrap();
+            assert_eq!(child.model_context_window, enabled.then_some(500_000));
+            assert_eq!(
+                child.model_auto_compact_token_limit,
+                if enabled { absolute } else { None }
+            );
+            assert_eq!(child.model_auto_compact_percent, percent);
+            assert_eq!(child.model_context_settings_v1, enabled);
+        }
+    }
+    #[tokio::test]
+    async fn model_context_v2_children_and_guardian_share_layered_resolution() {
+        use codex_models_manager::manager::{ModelsManager, StaticModelsManager};
+        use codex_protocol::openai_models::{
+            ModelContextSettings, ModelContextSettingsValues, ModelsResponse,
+        };
+        let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
+        let config = std::sync::Arc::make_mut(&mut turn.config);
+        config.model_context_settings_v1 = true;
+        config.model_context_window = Some(500_000);
+        config.model_auto_compact_token_limit = Some(400_000);
+        config
+            .features
+            .enable(Feature::SubagentDefaultContextLimits)
+            .unwrap();
+        let child = build_agent_shared_config(&turn).unwrap();
+        let mut row = codex_models_manager::model_info::model_info_from_slug("child");
+        row.max_context_window = Some(1_000_000);
+        row.context_settings = Some(ModelContextSettings {
+            catalog: Some(ModelContextSettingsValues {
+                context_window: Some(1_000_000),
+                auto_compact_percent: Some(75),
+                ..Default::default()
+            }),
+            owner: Some(ModelContextSettingsValues {
+                context_window: Some(300_000),
+                auto_compact_percent: Some(60),
+                ..Default::default()
+            }),
+            preserved: Some(ModelContextSettingsValues {
+                context_window: Some(200_000),
+                auto_compact_percent: Some(50),
+                ..Default::default()
+            }),
+        });
+        for (stage, window, compact, budget) in [
+            (0, 200_000, 100_000, 190_000),
+            (1, 300_000, 180_000, 285_000),
+            (2, 500_000, 400_000, 475_000),
+        ] {
+            if stage == 1 {
+                row.context_settings.as_mut().unwrap().preserved = None;
+            }
+            if stage == 2 {
+                row.context_settings.as_mut().unwrap().owner = None;
+            }
+            let manager = StaticModelsManager::new(
+                None,
+                ModelsResponse {
+                    models: vec![row.clone()],
+                },
+                codex_models_manager::ModelOrigin::ExplicitConfig,
+            );
+            let model = manager
+                .get_model_info("child", &child.to_models_manager_config())
+                .await;
+            assert_eq!(model.resolved_context_window(), Some(window));
+            assert_eq!(model.auto_compact_token_limit(), Some(compact));
+            assert_eq!(child.guardian_input_token_limit(&model), budget);
+        }
+    }
 }

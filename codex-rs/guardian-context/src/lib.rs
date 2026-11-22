@@ -95,6 +95,7 @@ pub use budget::estimate_input_tokens;
 pub use budget::estimate_input_tokens_from_serialized_len;
 pub use budget::image_reference_bytes;
 pub use budget::request_token_bucket;
+pub use budget::resolved_input_token_limit;
 pub use cursor::TranscriptCursor;
 pub use cursor::TranscriptMode;
 pub use cursor::TranscriptSelection;
@@ -109,7 +110,7 @@ pub use preparation::ContextBudgeting;
 pub use preparation::ContextProfile;
 pub use preparation::SyncImagePreparer;
 pub use preparation::SyncPreparation;
-pub use preparation::prepare_sync_context;
+pub use preparation::prepare_context;
 pub use preparation::prepare_sync_context_with_facts;
 pub use preparation::prepare_sync_delivery;
 pub use preparation::prepare_sync_images;
@@ -188,7 +189,7 @@ pub struct SectionInput<'a> {
     pub target: ContextTarget,
     /// Parent conversation history available to this contribution.
     pub history: &'a dyn SectionHistory,
-    /// Evidence sources and per-entry limits for this collection.
+    /// Evidence sources and request-time entry limits.
     pub transcript: &'a ConversationTranscriptConfig,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
@@ -294,6 +295,8 @@ pub trait SectionContributor: Send + Sync {
 pub enum SectionError {
     /// One native message or tool-call ID identifies different evidence.
     ConflictingNativeMessage,
+    /// Configured reservations must neither overcommit nor underfill the nominal budget.
+    SectionMinimumTotalMismatch { total: u128 },
     /// Evidence required by this contributor for the current input is missing.
     MissingRequiredEvidence { section: &'static str },
     /// A section cannot be delivered by the requested consumer.
@@ -305,6 +308,10 @@ pub enum SectionError {
 impl std::fmt::Display for SectionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SectionMinimumTotalMismatch { total } => write!(
+                formatter,
+                "elastic section minimums must sum to DEFAULT_MAX_INPUT_TOKENS ({DEFAULT_MAX_INPUT_TOKENS}), got {total}"
+            ),
             Self::ConflictingNativeMessage => {
                 formatter.write_str("conflicting native messages or tool calls share an ID")
             }

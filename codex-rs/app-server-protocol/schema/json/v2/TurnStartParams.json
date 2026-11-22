@@ -357,10 +357,34 @@
           "type": "object"
         },
         {
-          "properties": {
-            "audio_url": {
-              "type": "string"
+          "anyOf": [
+            {
+              "properties": {
+                "audio_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "audio_url"
+              ],
+              "title": "AudioUrlFunctionCallOutputContentItem",
+              "type": "object"
             },
+            {
+              "properties": {
+                "file_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ],
+              "title": "FileIdFunctionCallOutputContentItem",
+              "type": "object"
+            }
+          ],
+          "description": "Inline audio data or an uploaded file loaded by the Responses API.",
+          "properties": {
             "type": {
               "enum": [
                 "input_audio"
@@ -370,7 +394,6 @@
             }
           },
           "required": [
-            "audio_url",
             "type"
           ],
           "title": "InputAudioFunctionCallOutputContentItem",
@@ -449,6 +472,26 @@
         "enabled"
       ],
       "type": "string"
+    },
+    "OwnerInput": {
+      "additionalProperties": false,
+      "description": "One original owner identity in a turn/start prefix.",
+      "properties": {
+        "clientUserMessageId": {
+          "type": "string"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/UserInput"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "clientUserMessageId",
+        "input"
+      ],
+      "type": "object"
     },
     "Personality": {
       "description": "Deprecated: `friendly` and `pragmatic` no longer select a style.",
@@ -1030,6 +1073,13 @@
         "array",
         "null"
       ]
+    },
+    "ownerInputs": {
+      "description": "Ordered owner prefix, excluding the ordinary carrier. Even [] requests ownerInputBatch v1: one idle turn containing every original identity.",
+      "items": {
+        "$ref": "#/definitions/OwnerInput"
+      },
+      "type": "array"
     },
     "parentTurnId": {
       "description": "ID of the turn that caused this new turn to start.\n\nSet this when starting work on behalf of another turn, such as delegated work in a different thread. Leave unset for work started directly by the user. Ignored when this request adds input to an active turn.",

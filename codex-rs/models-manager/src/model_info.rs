@@ -1,6 +1,8 @@
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelContextSettings;
+use codex_protocol::openai_models::ModelContextSettingsValues;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
@@ -17,17 +19,61 @@ pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 const PERSONALITY_SECTION_HEADER: &str = "# Personality";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
-    if let Some(context_window) = config.model_context_window {
-        model.context_window = Some(
-            model
-                .max_context_window
-                .map_or(context_window, |max_context_window| {
-                    context_window.min(max_context_window)
+    if config.model_context_settings_v1 {
+        // Preserve the original catalog fields before replacing flat runtime values.
+        let settings = model
+            .context_settings
+            .get_or_insert_with(|| ModelContextSettings {
+                catalog: Some(ModelContextSettingsValues {
+                    context_window: model.context_window,
+                    auto_compact_percent: model.auto_compact_percent,
+                    auto_compact_token_limit: model.auto_compact_token_limit,
                 }),
-        );
-    }
-    if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
-        model.auto_compact_token_limit = Some(auto_compact_token_limit);
+                ..Default::default()
+            });
+        let preserved = settings.preserved.as_ref();
+        let owner = settings.owner.as_ref();
+        let catalog = settings.catalog.as_ref();
+        model.context_window = preserved
+            .and_then(|s| s.context_window)
+            .or(owner.and_then(|s| s.context_window))
+            .or(config.model_context_window)
+            .or(catalog.and_then(|s| s.context_window))
+            .or(model.max_context_window)
+            .map(|window| {
+                model
+                    .max_context_window
+                    .map_or(window, |max| window.min(max))
+            });
+        let profile = ModelContextSettingsValues {
+            context_window: None,
+            auto_compact_percent: config.model_auto_compact_percent,
+            auto_compact_token_limit: config.model_auto_compact_token_limit,
+        };
+        let (percent, absolute) = preserved
+            .and_then(ModelContextSettingsValues::compact_setting)
+            .or_else(|| owner.and_then(ModelContextSettingsValues::compact_setting))
+            .or_else(|| profile.compact_setting())
+            .or_else(|| catalog.and_then(ModelContextSettingsValues::compact_setting))
+            .unwrap_or_default();
+        model.auto_compact_percent = percent;
+        model.auto_compact_token_limit = absolute;
+    } else {
+        // Legacy catalogs never interpreted percentages and Profile values win.
+        model.auto_compact_percent = None;
+        model.runtime_context_window_fallback = None;
+        if let Some(context_window) = config.model_context_window {
+            model.context_window = Some(
+                model
+                    .max_context_window
+                    .map_or(context_window, |max_context_window| {
+                        context_window.min(max_context_window)
+                    }),
+            );
+        }
+        if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
+            model.auto_compact_token_limit = Some(auto_compact_token_limit);
+        }
     }
     if let Some(token_limit) = config.tool_output_token_limit {
         model.truncation_policy = match model.truncation_policy.mode {
@@ -123,11 +169,15 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         default_verbosity: None,
         apply_patch_tool_type: None,
         web_search_tool_type: WebSearchToolType::Text,
+        web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),
         max_context_window: Some(272_000),
         auto_compact_token_limit: None,
+        auto_compact_percent: None,
+        runtime_context_window_fallback: None,
+        context_settings: None,
         comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),

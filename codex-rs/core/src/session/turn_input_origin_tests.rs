@@ -17,6 +17,7 @@ fn runtime() -> Runtime {
         pending: Vec::new(),
         owner_carries: Default::default(),
         paused: true,
+        stopped: false,
         poisoned: false,
         retries: Default::default(),
         permits: Default::default(),

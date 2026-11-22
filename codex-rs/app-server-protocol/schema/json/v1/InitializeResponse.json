@@ -42,6 +42,15 @@
         "null"
       ]
     },
+    "externalInputStopAnswer": {
+      "description": "One launch-bound cutex-asks ANSWER turn through the owner-Stop gate, without globally resuming ExternalInput. Absent on older servers.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "externalInputVersion": {
       "description": "Private launch-bound common ExternalInput control API version, when enabled.",
       "format": "uint32",
@@ -67,6 +76,15 @@
       "default": false,
       "description": "Every opened public text item receives a full terminal snapshot, including cancellation, upstream failure and early EOF, retained in thread history.",
       "type": "boolean"
+    },
+    "ownerInputBatch": {
+      "description": "Ordered original owner prefix plus carrier, admitted as one new turn.",
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "ownerInputCarries": {
       "description": "Atomic owner input + canonical ExternalInput envelopes on turn/start and turn/steer.",

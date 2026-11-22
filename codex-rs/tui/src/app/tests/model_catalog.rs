@@ -23,6 +23,50 @@ fn bedrock_model_presets() -> Vec<ModelPreset> {
     .expect("Bedrock model catalog")
 }
 
+#[tokio::test]
+async fn queued_model_choice_expires_when_the_default_provider_changes() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let (mut server, requests, proxy) =
+        Box::pin(session_lifecycle_requests::start_recording_app_server(
+            &app.config,
+            /*blocked_thread_list*/ None,
+            /*failed_thread_name*/ None,
+        ))
+        .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let started = server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    let original = app.chat_widget.current_model().to_string();
+    while events.try_recv().is_ok() {}
+    // An old row may arrive after a local switch, or after a different chat became active.
+    for (origin, switched) in [(thread_id, true), (ThreadId::new(), false)] {
+        *app.model_catalog.provider_write.lock().await = switched;
+        let queued = AppEvent::ScopedModelPicker {
+            backend: server.backend_id(),
+            thread_id: Some(origin),
+            event: Box::new(AppEvent::SelectSessionModel {
+                model: "foreign-only".into(),
+                effort: None,
+                service_tier: None,
+            }),
+        };
+        Box::pin(app.handle_event(&mut tui, &mut server, queued)).await?;
+        assert_eq!(app.chat_widget.current_model(), original);
+        assert!(
+            !std::iter::from_fn(|| events.try_recv().ok())
+                .any(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
+        );
+    }
+    assert!(
+        session_lifecycle_requests::recorded_params(&requests, "thread/settings/update").is_empty()
+    );
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
 #[test]
 fn model_picker_refresh_updates_app_catalog_from_app_server() -> Result<()> {
     // Keep the full model-loading dispatcher on the same enlarged test stack used by

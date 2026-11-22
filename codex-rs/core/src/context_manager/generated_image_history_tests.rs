@@ -99,7 +99,8 @@ fn user_image_message() -> ResponseItem {
 }
 
 fn history_with(items: &[ResponseItem]) -> ContextManager {
-    let mut history = ContextManager::new();
+    let mut history =
+        ContextManager::new(codex_protocol_test_support::uuid_v7_item_id_generator_for_test());
     history.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
     history
 }

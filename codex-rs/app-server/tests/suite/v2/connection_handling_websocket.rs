@@ -1,7 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
+use app_test_support::DEFAULT_APP_SERVER_TEST_ARGS;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
@@ -285,7 +285,7 @@ async fn websocket_transport_rejects_missing_and_invalid_capability_tokens() -> 
     ];
 
     let (mut process, bind_addr) =
-        spawn_websocket_server_with_args(codex_home.path(), "ws://0.0.0.0:0", &auth_args).await?;
+        spawn_websocket_server_with_args(codex_home.path(), "ws://127.0.0.1:0", &auth_args).await?;
 
     assert_websocket_connect_rejected(bind_addr, /*bearer_token*/ None).await?;
     assert_websocket_connect_rejected(bind_addr, Some("wrong-token")).await?;
@@ -453,8 +453,6 @@ async fn websocket_transport_rejects_unauthenticated_non_loopback_startup() -> R
     Ok(())
 }
 
-#[test_case::test_case(true ; "default unloads idle disconnected threads")]
-#[test_case::test_case(false ; "persistent host retains disconnected threads")]
 #[tokio::test]
 async fn websocket_disconnect_cancels_guardian_review_and_releases_thread() -> Result<()> {
     let (release, gate) = tokio::sync::oneshot::channel();
@@ -523,6 +521,8 @@ async fn websocket_disconnect_cancels_guardian_review_and_releases_thread() -> R
     Ok(())
 }
 
+#[test_case::test_case(true; "unload_enabled")]
+#[test_case::test_case(false; "unload_disabled")]
 #[tokio::test]
 async fn websocket_disconnect_keeps_last_subscribed_thread_loaded_until_idle_timeout(
     unload_enabled: bool,
@@ -586,7 +586,7 @@ pub(super) async fn spawn_websocket_server_with_args(
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
         .arg(listen_url)
-        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
+        .args(DEFAULT_APP_SERVER_TEST_ARGS)
         .args(extra_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -724,7 +724,7 @@ async fn run_websocket_server_to_completion_with_args(
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
         .arg(listen_url)
-        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
+        .args(DEFAULT_APP_SERVER_TEST_ARGS)
         .args(extra_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

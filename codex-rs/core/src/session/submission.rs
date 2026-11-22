@@ -9,6 +9,9 @@ use tokio::sync::OwnedRwLockReadGuard;
 pub(crate) struct Submission {
     pub id: String,
     pub op: Op,
+    /// Trusted host metadata for an explicit owner/client Stop request only.
+    /// Ordinary ops, parent interrupts and internal cancellations never set it.
+    pub owner_stop: bool,
     /// Accepted with settings, never separately from the request that supplied them.
     pub turn_extension_init: Option<ExtensionDataInit>,
     /// Optional W3C trace carrier propagated across async submission handoffs.

@@ -3,13 +3,13 @@
 cute-codex is a modified version of OpenAI Codex (https://github.com/openai/codex), licensed under
 the Apache License, Version 2.0 (see LICENSE and NOTICE, which are upstream's and unchanged).
 
-This release is based on upstream tag `rust-v0.167.0` (commit `086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`). The files listed below
+This release is based on upstream tag `rust-v0.169.0` (commit `d32063f96c2dff1dc96af839b3952abb6acfeda4`). The files listed below
 under "Modified upstream files" were changed by The Cutex Authors (Copyright 2026 The Cutex
 Authors); files under "Added files" are new in cute-codex and are licensed under the same
-Apache License, Version 2.0. The exact changes are the difference between `rust-v0.167.0` and this
+Apache License, Version 2.0. The exact changes are the difference between `rust-v0.169.0` and this
 release commit.
 
-## Modified upstream files (370)
+## Modified upstream files (417)
 
 - CHANGELOG.md
 - README.md
@@ -87,22 +87,28 @@ release commit.
 - codex-rs/app-server/src/message_processor_workspace_routing_tests.rs
 - codex-rs/app-server/src/notification_media.rs
 - codex-rs/app-server/src/request_processors.rs
+- codex-rs/app-server/src/request_processors/feedback_processor.rs
 - codex-rs/app-server/src/request_processors/initialize_processor.rs
+- codex-rs/app-server/src/request_processors/persisted_resume_settings_tests.rs
 - codex-rs/app-server/src/request_processors/thread_lifecycle.rs
 - codex-rs/app-server/src/request_processors/thread_processor.rs
 - codex-rs/app-server/src/request_processors/token_usage_replay.rs
 - codex-rs/app-server/src/request_processors/turn_processor.rs
+- codex-rs/app-server/src/thread_state.rs
 - codex-rs/app-server/src/user_verification_test_support.rs
 - codex-rs/app-server/tests/common/models_cache.rs
 - codex-rs/app-server/tests/suite/v2/client_metadata.rs
 - codex-rs/app-server/tests/suite/v2/connection_handling_websocket.rs
 - codex-rs/app-server/tests/suite/v2/initialize.rs
 - codex-rs/app-server/tests/suite/v2/realtime_conversation.rs
+- codex-rs/app-server/tests/suite/v2/request_permissions.rs
+- codex-rs/app-server/tests/suite/v2/snapshots/all__suite__v2__thread_sample__sample_inherits_parent_context.snap
 - codex-rs/app-server/tests/suite/v2/turn_start.rs
 - codex-rs/app-server/tests/suite/v2/turn_steer.rs
 - codex-rs/cli/src/main.rs
 - codex-rs/cli/tests/debug_models.rs
 - codex-rs/code-mode-runtime/src/output/output_render.rs
+- codex-rs/code-mode-runtime/src/runtime/value.rs
 - codex-rs/codex-api/src/common.rs
 - codex-rs/codex-api/src/endpoint/responses_websocket.rs
 - codex-rs/codex-api/tests/clients.rs
@@ -112,12 +118,15 @@ release commit.
 - codex-rs/config/src/guardian.rs
 - codex-rs/config/src/guardian_tests.rs
 - codex-rs/core/config.schema.json
+- codex-rs/core/src/agent/child_config.rs
+- codex-rs/core/src/agent/control_tests.rs
 - codex-rs/core/src/agent/history.rs
 - codex-rs/core/src/client.rs
 - codex-rs/core/src/client_common_tests.rs
-- codex-rs/core/src/client_runtime_auth_tests.rs
 - codex-rs/core/src/client_tests.rs
 - codex-rs/core/src/client_tool_metadata_tests.rs
+- codex-rs/core/src/codex_delegate.rs
+- codex-rs/core/src/codex_delegate_tests.rs
 - codex-rs/core/src/codex_thread.rs
 - codex-rs/core/src/compact.rs
 - codex-rs/core/src/compact_remote_v2.rs
@@ -129,21 +138,32 @@ release commit.
 - codex-rs/core/src/connectors.rs
 - codex-rs/core/src/context/mod.rs
 - codex-rs/core/src/context_manager/history.rs
+- codex-rs/core/src/context_manager/history_tests.rs
 - codex-rs/core/src/context_manager/mod.rs
+- codex-rs/core/src/feedback_config.rs
+- codex-rs/core/src/guardian/input_budget.rs
 - codex-rs/core/src/guardian/request_budget.rs
+- codex-rs/core/src/guardian/review.rs
 - codex-rs/core/src/guardian/review_session.rs
 - codex-rs/core/src/guardian/review_session_prompt.rs
+- codex-rs/core/src/guardian/review_session_tests.rs
+- codex-rs/core/src/guardian/tests.rs
 - codex-rs/core/src/hook_runtime.rs
 - codex-rs/core/src/lib.rs
 - codex-rs/core/src/mcp_tool_call.rs
+- codex-rs/core/src/session/context_window.rs
+- codex-rs/core/src/session/handlers.rs
 - codex-rs/core/src/session/input_queue.rs
 - codex-rs/core/src/session/mcp.rs
 - codex-rs/core/src/session/mod.rs
 - codex-rs/core/src/session/rollout_reconstruction.rs
+- codex-rs/core/src/session/rollout_reconstruction_tests.rs
 - codex-rs/core/src/session/session.rs
 - codex-rs/core/src/session/step_activation.rs
+- codex-rs/core/src/session/step_activation_tests.rs
 - codex-rs/core/src/session/step_settings.rs
 - codex-rs/core/src/session/step_settings_tests.rs
+- codex-rs/core/src/session/submission.rs
 - codex-rs/core/src/session/tests.rs
 - codex-rs/core/src/session/turn.rs
 - codex-rs/core/src/session/turn_context.rs
@@ -151,6 +171,7 @@ release commit.
 - codex-rs/core/src/stream_events_utils.rs
 - codex-rs/core/src/tasks/compact.rs
 - codex-rs/core/src/tasks/mod.rs
+- codex-rs/core/src/tasks/review.rs
 - codex-rs/core/src/thread_manager.rs
 - codex-rs/core/src/thread_manager_tests.rs
 - codex-rs/core/src/tools/mod.rs
@@ -172,7 +193,9 @@ release commit.
 - codex-rs/core/tests/suite/models_cache_ttl.rs
 - codex-rs/core/tests/suite/remote_models.rs
 - codex-rs/core/tests/suite/request_permissions.rs
+- codex-rs/core/tests/suite/resume_warning.rs
 - codex-rs/core/tests/suite/rmcp_client.rs
+- codex-rs/core/tests/suite/scenarios_injected_agent_mail.rs
 - codex-rs/core/tests/suite/spawn_agent_description.rs
 - codex-rs/core/tests/suite/view_image.rs
 - codex-rs/exec-server/src/process_sandbox.rs
@@ -188,13 +211,14 @@ release commit.
 - codex-rs/ext/guardian-v2/src/async_scorer/approval.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/decisions.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/decisions_tests.rs
-- codex-rs/ext/guardian-v2/src/async_scorer/extension.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/metrics.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/observation.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/sampler.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/sampler/connection_pool_cancellation_tests.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/sampler/execution.rs
 - codex-rs/ext/guardian-v2/src/async_scorer/sampler_tests.rs
+- codex-rs/ext/guardian-v2/src/async_scorer/startup.rs
+- codex-rs/ext/guardian-v3/src/evidence.rs
 - codex-rs/ext/image-generation/src/tool.rs
 - codex-rs/ext/queue/src/service.rs
 - codex-rs/external-agent-migration/src/sessions/append.rs
@@ -202,6 +226,7 @@ release commit.
 - codex-rs/guardian-context/src/budget_tests.rs
 - codex-rs/guardian-context/src/composition.rs
 - codex-rs/guardian-context/src/enforcement.rs
+- codex-rs/guardian-context/src/enforcement_tests.rs
 - codex-rs/guardian-context/src/images.rs
 - codex-rs/guardian-context/src/lib.rs
 - codex-rs/guardian-context/src/preparation/repl.rs
@@ -229,9 +254,12 @@ release commit.
 - codex-rs/model-provider/src/amazon_bedrock/mod.rs
 - codex-rs/model-provider/src/capabilities.rs
 - codex-rs/model-provider/src/gcp/mod.rs
+- codex-rs/model-provider/src/request_setup.rs
+- codex-rs/models-manager/src/config.rs
 - codex-rs/models-manager/src/manager.rs
 - codex-rs/models-manager/src/manager_tests.rs
 - codex-rs/models-manager/src/model_info.rs
+- codex-rs/models-manager/src/model_info_tests.rs
 - codex-rs/prompts/src/model_instructions_tests.rs
 - codex-rs/protocol/Cargo.toml
 - codex-rs/protocol/src/config_types.rs
@@ -260,6 +288,7 @@ release commit.
 - codex-rs/thread-manager-sample/src/main.rs
 - codex-rs/thread-store/src/live_thread.rs
 - codex-rs/thread-store/src/local/mod.rs
+- codex-rs/thread-store/src/local/model_context_tests.rs
 - codex-rs/thread-store/src/local/paginated_fork.rs
 - codex-rs/thread-store/src/local/pending_thread_metadata_tests.rs
 - codex-rs/thread-store/src/local/read_thread.rs
@@ -270,10 +299,13 @@ release commit.
 - codex-rs/thread-store/src/local/rollout_migration/canonicalizer.rs
 - codex-rs/thread-store/src/local/rollout_migration/rollback_plan.rs
 - codex-rs/thread-store/src/local/rollout_migration/rollback_replay.rs
+- codex-rs/thread-store/src/local/rollout_migration_tests.rs
 - codex-rs/thread-store/src/local/tests/delegated_preview_tests.rs
 - codex-rs/thread-store/src/local/thread_history.rs
+- codex-rs/thread-store/src/local/thread_history/read.rs
 - codex-rs/thread-store/src/local/thread_history/read_tests.rs
 - codex-rs/thread-store/src/local/thread_history/realtime.rs
+- codex-rs/thread-store/src/local/thread_history/search.rs
 - codex-rs/thread-store/src/local/thread_history_materialization.rs
 - codex-rs/thread-store/src/local/thread_history_materialization_tests.rs
 - codex-rs/thread-store/src/local/update_thread_metadata.rs
@@ -283,19 +315,25 @@ release commit.
 - codex-rs/thread-store/src/types.rs
 - codex-rs/tools/src/lib.rs
 - codex-rs/tui/src/app.rs
+- codex-rs/tui/src/app/agents_overview_tests.rs
 - codex-rs/tui/src/app/agents_overview_usage_tests.rs
 - codex-rs/tui/src/app/app_server_event_targets.rs
 - codex-rs/tui/src/app/app_server_events.rs
 - codex-rs/tui/src/app/background_requests.rs
 - codex-rs/tui/src/app/config_persistence.rs
 - codex-rs/tui/src/app/event_dispatch.rs
+- codex-rs/tui/src/app/history_ui_tests.rs
 - codex-rs/tui/src/app/owned_transcript_tests.rs
 - codex-rs/tui/src/app/recap_tests.rs
 - codex-rs/tui/src/app/session_lifecycle.rs
 - codex-rs/tui/src/app/tests.rs
+- codex-rs/tui/src/app/tests/background_task_defaults_tests.rs
 - codex-rs/tui/src/app/tests/browsing_pagination_tests.rs
 - codex-rs/tui/src/app/tests/fresh_sparkle_tests.rs
 - codex-rs/tui/src/app/tests/model_catalog.rs
+- codex-rs/tui/src/app/tests/safety_buffering.rs
+- codex-rs/tui/src/app/tests/session_lifecycle_requests.rs
+- codex-rs/tui/src/app/thread_attachment.rs
 - codex-rs/tui/src/app/thread_events.rs
 - codex-rs/tui/src/app/thread_routing.rs
 - codex-rs/tui/src/app/thread_session_state.rs
@@ -305,12 +343,16 @@ release commit.
 - codex-rs/tui/src/app_server_session.rs
 - codex-rs/tui/src/app_server_session/history.rs
 - codex-rs/tui/src/app_server_session/rollout_history.rs
+- codex-rs/tui/src/app_server_session/user_message_submission.rs
 - codex-rs/tui/src/bottom_pane/chat_composer.rs
+- codex-rs/tui/src/bottom_pane/chat_composer/composer_layout.rs
 - codex-rs/tui/src/bottom_pane/chat_composer/footer_state.rs
+- codex-rs/tui/src/bottom_pane/chat_composer/native_status.rs
 - codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs
 - codex-rs/tui/src/bottom_pane/chat_composer/sparkle_tests.rs
 - codex-rs/tui/src/bottom_pane/chat_composer/status_surface.rs
 - codex-rs/tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+- codex-rs/tui/src/bottom_pane/chat_composer/warning_notice.rs
 - codex-rs/tui/src/bottom_pane/chat_composer/warning_notice_tests.rs
 - codex-rs/tui/src/bottom_pane/footer.rs
 - codex-rs/tui/src/bottom_pane/mod.rs
@@ -351,6 +393,7 @@ release commit.
 - codex-rs/tui/src/chatwidget/tests/permissions.rs
 - codex-rs/tui/src/chatwidget/tests/plan_mode.rs
 - codex-rs/tui/src/chatwidget/tests/popups_and_settings.rs
+- codex-rs/tui/src/chatwidget/tests/slash_commands.rs
 - codex-rs/tui/src/chatwidget/tests/sparkle_submission_tests.rs
 - codex-rs/tui/src/chatwidget/tests/status_and_layout.rs
 - codex-rs/tui/src/chatwidget/tool_lifecycle.rs
@@ -360,10 +403,13 @@ release commit.
 - codex-rs/tui/src/dynamic_tools.rs
 - codex-rs/tui/src/history_cell/mcp.rs
 - codex-rs/tui/src/history_cell/mod.rs
+- codex-rs/tui/src/history_cell/patches_tests.rs
 - codex-rs/tui/src/history_cell/tests.rs
 - codex-rs/tui/src/lib.rs
 - codex-rs/tui/src/local_settings.rs
+- codex-rs/tui/src/managed_worktree_tools_tests.rs
 - codex-rs/tui/src/model_catalog.rs
+- codex-rs/tui/src/pets/mod.rs
 - codex-rs/tui/src/session_state.rs
 - codex-rs/tui/src/snapshots/codex_tui__update_prompt__tests__update_picker_selected_28x12.snap
 - codex-rs/tui/src/snapshots/codex_tui__update_prompt__tests__update_prompt_modal.snap
@@ -375,6 +421,7 @@ release commit.
 - codex-rs/tui/src/thread_transcript.rs
 - codex-rs/tui/src/token_usage.rs
 - codex-rs/tui/src/version.rs
+- codex-rs/tui/src/worktree_startup_tests.rs
 - rbe.bzl
 - sdk/python/src/openai_codex/generated/notification_registry.py
 - sdk/python/src/openai_codex/generated/v2_all.py
@@ -382,7 +429,7 @@ release commit.
 - third_party/v8/BUILD.bazel
 - tools/argument-comment-lint/lint_aspect.bzl
 
-## Added files (175)
+## Added files (182)
 
 - codex-rs/app-server-protocol/schema/json/v2/ExternalInputStatusChangedNotification.json
 - codex-rs/app-server-protocol/schema/json/v2/PresentationAppendedNotification.json
@@ -404,6 +451,7 @@ release commit.
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputStatus.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputStatusChangedNotification.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/ExternalInputView.ts
+- codex-rs/app-server-protocol/schema/typescript/v2/OwnerInput.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/Presentation.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/PresentationAppended.ts
 - codex-rs/app-server-protocol/schema/typescript/v2/PresentationAppendedNotification.ts
@@ -417,6 +465,7 @@ release commit.
 - codex-rs/app-server-protocol/src/protocol/thread_history_text_echo.rs
 - codex-rs/app-server-protocol/src/protocol/thread_history_text_echo_tests.rs
 - codex-rs/app-server-protocol/src/protocol/v2/external_input.rs
+- codex-rs/app-server-protocol/src/protocol/v2/owner_input_batch_tests.rs
 - codex-rs/app-server-protocol/src/protocol/v2/presentation.rs
 - codex-rs/app-server/src/external_input_binding.rs
 - codex-rs/app-server/src/external_input_binding_tests.rs
@@ -424,6 +473,7 @@ release commit.
 - codex-rs/app-server/src/request_processors/presentation_processor.rs
 - codex-rs/app-server/tests/model_variants_capability.rs
 - codex-rs/app-server/tests/thread_retention_capability.rs
+- codex-rs/app-server/tests/turn_interrupt_idle.rs
 - codex-rs/core/src/client_item_id_tests.rs
 - codex-rs/core/src/context/external_input.rs
 - codex-rs/core/src/context/external_input_policy.rs
@@ -444,6 +494,7 @@ release commit.
 - codex-rs/core/src/session/external_input_migration.rs
 - codex-rs/core/src/session/external_input_processing.rs
 - codex-rs/core/src/session/owner_carries_tests.rs
+- codex-rs/core/src/session/owner_input_batch.rs
 - codex-rs/core/src/session/presentation.rs
 - codex-rs/core/src/session/text_terminal_abort_tests.rs
 - codex-rs/core/src/session/text_terminals.rs
@@ -490,6 +541,7 @@ release commit.
 - codex-rs/tools/src/tool_schema_compat_tests.rs
 - codex-rs/tui/src/app/status_preferences.rs
 - codex-rs/tui/src/app/status_preferences_tests.rs
+- codex-rs/tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__agents_overview_preserves_model_gated_astra_sparkle_on_return.snap
 - codex-rs/tui/src/app_server_session/presentation.rs
 - codex-rs/tui/src/bottom_pane/status_line_layout.rs
 - codex-rs/tui/src/bottom_pane/status_line_layout_tests.rs
@@ -559,11 +611,14 @@ release commit.
 - codex-rs/tui/src/status_animation.rs
 - codex-rs/tui/src/status_animation_tests.rs
 - docs/fork/ask-hooks.md
+- docs/fork/model-context-v1.md
+- scripts/private_owner_input_batch.py
 
-## Removed upstream files (14)
+## Removed upstream files (15)
 
 - codex-rs/state/thread_history_migrations/0007_thread_item_lifecycle_timestamps.sql
 - codex-rs/state/thread_history_migrations/0008_thread_turn_root.sql
+- codex-rs/tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__review_regression_agents_overview_creation_is_fresh_but_returning_is_not.snap
 - codex-rs/tui/src/app/tests/snapshots/codex_tui__app__tests__fresh_sparkle_tests__astra_picker_confirms_the_model_at_application_after_an_automatic_update.snap
 - codex-rs/tui/src/app/tests/snapshots/codex_tui__app__tests__fresh_sparkle_tests__session_only_astra_picker_shows_stars_only_on_an_untouched_task.snap
 - codex-rs/tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__sparkle__tests__a_fresh_astra_response_waits_for_the_pending_command_to_leave.snap

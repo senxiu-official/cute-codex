@@ -17,6 +17,7 @@ fn runtime() -> Runtime {
         pending: Vec::new(),
         owner_carries: BTreeMap::new(),
         paused: false,
+        stopped: false,
         poisoned: false,
         retries: BTreeMap::new(),
         permits: Default::default(),

@@ -9,6 +9,7 @@ use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnStatus;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
@@ -221,6 +222,20 @@ impl ThreadState {
         self.current_turn_history.active_turn_id()
     }
 
+    /// An interrupted turn may remain in the display snapshot. Only an
+    /// in-progress snapshot names an operationally active turn.
+    pub(crate) fn running_turn_id(&self) -> Option<&str> {
+        if self
+            .current_turn_history
+            .active_turn_metadata_snapshot()?
+            .status
+            != TurnStatus::InProgress
+        {
+            return None;
+        }
+        self.active_turn_id()
+    }
+
     pub(crate) fn active_turn_snapshot_with_items_view(
         &self,
         items_view: TurnItemsView,
@@ -235,7 +250,10 @@ impl ThreadState {
 
     pub(crate) fn track_current_turn_event(&mut self, event_turn_id: &str, event: &EventMsg) {
         if let EventMsg::TurnStarted(payload) = event {
-            self.turn_summary.started_at = payload.started_at;
+            self.turn_summary = TurnSummary {
+                started_at: payload.started_at,
+                ..Default::default()
+            };
         }
         if let EventMsg::ItemCompleted(payload) = event
             && let CoreTurnItem::AgentMessage(item) = &payload.item
@@ -254,7 +272,14 @@ impl ThreadState {
         }
         if matches!(event, EventMsg::TurnAborted(_) | EventMsg::TurnComplete(_)) {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
-            if !self.current_turn_history.has_active_turn() {
+            // Upstream closes interrupted history turns as well. Retain that
+            // display snapshot so stale interrupt/elicitation IDs cannot name a
+            // new core turn before its TurnStarted event reaches this listener.
+            let retain_interrupted = self
+                .current_turn_history
+                .active_turn_metadata_snapshot()
+                .is_some_and(|turn| turn.status == TurnStatus::Interrupted);
+            if !self.current_turn_history.has_active_turn() && !retain_interrupted {
                 self.current_turn_history.reset();
             }
         }
@@ -311,6 +336,76 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
+    fn started(id: &str) -> EventMsg {
+        EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+            turn_id: id.into(),
+            turn_attribution: None,
+            root_turn_id: None,
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        })
+    }
+
+    fn aborted(id: &str) -> EventMsg {
+        EventMsg::TurnAborted(codex_protocol::protocol::TurnAbortedEvent {
+            turn_id: Some(id.into()),
+            root_turn_id: None,
+            reason: codex_protocol::protocol::TurnAbortReason::Interrupted,
+            error: None,
+            started_at: None,
+            completed_at: None,
+            duration_ms: None,
+        })
+    }
+
+    #[test]
+    fn interrupted_display_snapshot_is_not_an_operationally_active_turn() {
+        let mut state = ThreadState::default();
+        assert_eq!(state.running_turn_id(), None);
+        state.track_current_turn_event("stopped", &started("stopped"));
+        assert_eq!(state.running_turn_id(), Some("stopped"));
+        state.track_current_turn_event("stopped", &aborted("stopped"));
+        let retained = state
+            .active_turn_snapshot()
+            .expect("display snapshot retained");
+        assert_eq!(retained.id, "stopped");
+        assert_eq!(retained.status, TurnStatus::Interrupted);
+        assert_eq!(state.active_turn_id(), Some("stopped"));
+        assert_eq!(state.running_turn_id(), None);
+    }
+
+    #[test]
+    fn completed_display_history_is_not_an_operationally_active_turn() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event("done", &started("done"));
+        state.track_current_turn_event(
+            "done",
+            &EventMsg::TurnComplete(codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: "done".into(),
+                root_turn_id: None,
+                last_agent_message: None,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        );
+        assert_eq!(state.running_turn_id(), None);
+    }
+
+    #[test]
+    fn late_terminal_event_for_old_turn_does_not_hide_new_active_turn() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event("old", &started("old"));
+        state.track_current_turn_event("old", &aborted("old"));
+        state.track_current_turn_event("new", &started("new"));
+        state.track_current_turn_event("old", &aborted("old"));
+        assert_eq!(state.running_turn_id(), Some("new"));
+    }
+
     #[test]
     fn note_thread_settings_reports_only_effective_changes() {
         let mut state = ThreadState::default();
@@ -330,6 +425,7 @@ mod tests {
     fn thread_settings(model: &str) -> ThreadSettings {
         ThreadSettings {
             disabled_plugin_ids: Vec::new(),
+            environments: Some(Vec::new()),
             cwd: AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
             approval_policy: AskForApproval::OnRequest,
             approvals_reviewer: ApprovalsReviewer::User,

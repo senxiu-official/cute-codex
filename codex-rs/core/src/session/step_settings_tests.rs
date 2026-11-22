@@ -566,3 +566,61 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
         );
     }
 }
+
+#[tokio::test]
+async fn model_context_v1_live_switch_keeps_percent_and_precedence_snapshot() {
+    use codex_protocol::openai_models::{ModelContextSettings, ModelContextSettingsValues};
+    let mut catalog = model_info_from_slug("catalog");
+    catalog.context_window = Some(400_000);
+    catalog.max_context_window = Some(500_000);
+    catalog.auto_compact_percent = Some(75);
+    let mut owner = catalog.clone();
+    owner.slug = "owner".into();
+    owner.context_settings = Some(ModelContextSettings {
+        catalog: Some(ModelContextSettingsValues {
+            context_window: Some(400_000),
+            auto_compact_percent: Some(75),
+            ..Default::default()
+        }),
+        owner: Some(ModelContextSettingsValues {
+            context_window: Some(300_000),
+            auto_compact_percent: Some(60),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut preserved = owner.clone();
+    preserved.slug = "preserved".into();
+    preserved.context_settings.as_mut().unwrap().preserved = Some(ModelContextSettingsValues {
+        context_window: Some(350_000),
+        auto_compact_percent: Some(50),
+        ..Default::default()
+    });
+    let manager = StaticModelsManager::new(
+        None,
+        ModelsResponse {
+            models: vec![catalog, owner, preserved],
+        },
+        codex_models_manager::ModelOrigin::ExplicitConfig,
+    );
+    let mut config = test_config().await;
+    config.model_context_settings_v1 = true;
+    config.model_context_window = Some(200_000);
+    config.model_auto_compact_percent = Some(80);
+    let overrides = ModelInfoOverrides::from(config.to_models_manager_config());
+    for (slug, window, compact) in [
+        ("catalog", 200_000, 160_000),
+        ("owner", 300_000, 180_000),
+        ("preserved", 350_000, 175_000),
+    ] {
+        let mut settings = configured_settings();
+        settings.collaboration_mode =
+            settings
+                .collaboration_mode
+                .with_updates(Some(slug.into()), None, None);
+        let resolved = settings.resolve_model_info(&manager, &overrides).await;
+        assert_eq!(resolved.resolved_context_window(), Some(window));
+        assert_eq!(resolved.auto_compact_token_limit(), Some(compact));
+    }
+    assert_eq!(config.legacy_context_window_override(), None);
+}

@@ -659,6 +659,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             tokio::spawn(async move {
                 on_file_change_request_approval_response(
                     item_id,
+                    event.turn_id,
                     pending_request_id,
                     rx,
                     conversation,
@@ -908,7 +909,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 Some(turn_id) => Some(turn_id),
                 None => {
                     let state = thread_state.lock().await;
-                    state.active_turn_id().map(str::to_owned)
+                    state.running_turn_id().map(str::to_owned)
                 }
             };
             let server_name = request.server_name.clone();
@@ -2023,6 +2024,7 @@ fn map_file_change_approval_decision(decision: FileChangeApprovalDecision) -> Re
 #[allow(clippy::too_many_arguments)]
 async fn on_file_change_request_approval_response(
     item_id: String,
+    turn_id: String,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     codex: Arc<CodexThread>,
@@ -2051,13 +2053,17 @@ async fn on_file_change_request_approval_response(
         }
     };
 
-    if let Err(err) = codex
-        .submit(Op::PatchApproval {
+    let op = match decision {
+        ReviewDecision::Abort => Op::CancelPatchApproval {
+            id: item_id,
+            turn_id,
+        },
+        decision => Op::PatchApproval {
             id: item_id,
             decision,
-        })
-        .await
-    {
+        },
+    };
+    if let Err(err) = codex.submit(op).await {
         error!("failed to submit PatchApproval: {err}");
     }
 }
@@ -2947,6 +2953,116 @@ mod tests {
         assert_eq!(decision, ReviewDecision::ApprovedForSession);
     }
 
+    #[tokio::test]
+    async fn mcp_elicitation_without_turn_id_uses_only_a_running_turn() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = load_default_config_for_test(&codex_home).await;
+        let thread_manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+                config.model_provider.clone(),
+                config.codex_home.to_path_buf(),
+                Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+            ),
+        );
+        let codex_core::NewThread {
+            thread_id: conversation_id,
+            thread: conversation,
+            ..
+        } = thread_manager
+            .start_thread(codex_core::StartThreadOptions::new(config))
+            .await?;
+        let thread_state = new_thread_state();
+        let started = |turn_id: &str| {
+            EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                turn_id: turn_id.into(),
+                turn_attribution: None,
+                root_turn_id: None,
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })
+        };
+        {
+            let mut state = thread_state.lock().await;
+            state.track_current_turn_event("stopped", &started("stopped"));
+            state.track_current_turn_event(
+                "stopped",
+                &EventMsg::TurnAborted(turn_aborted_event("stopped")),
+            );
+            assert_eq!(state.active_turn_id(), Some("stopped"));
+            assert_eq!(state.running_turn_id(), None);
+        }
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let root_outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            Arc::clone(&root_outgoing),
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+        let watches = ThreadWatchManager::new();
+        for (index, (turn_id, expected, start_new_turn)) in [
+            (None, None, false),
+            (Some("explicit"), Some("explicit"), false),
+            (None, Some("new"), true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if start_new_turn {
+                thread_state
+                    .lock()
+                    .await
+                    .track_current_turn_event("new", &started("new"));
+            }
+            apply_bespoke_event_handling(
+                Event {
+                    id: format!("elicitation-{index}"),
+                    msg: EventMsg::ElicitationRequest(
+                        codex_protocol::approvals::ElicitationRequestEvent {
+                            turn_id: turn_id.map(str::to_owned),
+                            server_name: "test-server".into(),
+                            id: codex_protocol::mcp::RequestId::String(format!("ask-{index}")),
+                            request: codex_protocol::approvals::ElicitationRequest::Form {
+                                meta: None,
+                                message: "A thread-scoped question".into(),
+                                requested_schema: json!({"type":"object","properties":{}}),
+                            },
+                        },
+                    ),
+                },
+                conversation_id,
+                Arc::clone(&conversation),
+                Arc::clone(&thread_manager),
+                outgoing.clone(),
+                Arc::clone(&thread_state),
+                watches.clone(),
+            )
+            .await;
+            let request_id = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    if let OutgoingMessage::Request(ServerRequest::McpServerElicitationRequest {
+                        request_id,
+                        params,
+                    }) = recv_broadcast_message(&mut rx).await?
+                    {
+                        assert_eq!(params.turn_id.as_deref(), expected);
+                        break anyhow::Ok(request_id);
+                    }
+                }
+            })
+            .await??;
+            root_outgoing
+                .notify_client_response(ConnectionId(1), request_id, json!({"action":"cancel"}))
+                .await;
+        }
+        Ok(())
+    }
+
     #[test]
     fn mcp_server_elicitation_turn_transition_error_maps_to_cancel() {
         let error = JSONRPCErrorError {
@@ -2979,6 +3095,104 @@ mod tests {
             .expect("paths should localize");
 
         assert_eq!(response, None);
+    }
+
+    #[tokio::test]
+    async fn invalid_permission_paths_interrupt_closes_external_input_without_owner_stop_provenance()
+    -> Result<()> {
+        use codex_protocol::external_input::Delivery;
+        use codex_protocol::external_input::Envelope;
+        use codex_protocol::external_input::Message;
+        use codex_protocol::external_input::Source;
+        use codex_protocol::external_input::SourceKind;
+        use codex_protocol::external_input_status::BusyReason;
+        use core_test_support::responses::start_mock_server;
+        use core_test_support::test_codex::test_codex;
+        let server = start_mock_server().await;
+        let initial = test_codex().build(&server).await?;
+        initial.codex.ensure_rollout_materialized().await;
+        initial.codex.flush_rollout().await?;
+        let thread = initial.session_configured.thread_id.to_string();
+        let bound = test_codex()
+            .with_thread_manager(move |manager| {
+                manager.with_external_input_owner(
+                    "stop-owner".into(),
+                    thread,
+                    codex_core::context::CanonicalBytePolicy::default(),
+                )
+            })
+            .restart(&server, &initial)
+            .await?;
+        let id = bound.session_configured.thread_id;
+        let state = new_thread_state();
+        let (tx, _rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            Arc::new(OutgoingMessageSender::new(
+                tx,
+                codex_analytics::AnalyticsEventsClient::disabled(),
+            )),
+            vec![ConnectionId(1)],
+            id,
+        );
+        let invalid = json!({"permissions":{"fileSystem":{"write":["relative-grant"]}}});
+        assert!(
+            request_permissions_response_from_client_result(Ok(Ok(invalid.clone()))).is_err(),
+            "must reach path-resolution failure"
+        );
+        let (response_tx, receiver) = oneshot::channel();
+        response_tx.send(Ok(invalid)).unwrap();
+        let watches = ThreadWatchManager::new();
+        let request_permissions_guard = watches.note_permission_requested(&id.to_string()).await;
+        on_request_permissions_response(
+            PendingRequestPermissionsResponse {
+                call_id: "permissions".into(),
+                conversation_id: id,
+                turn_id: "turn".into(),
+                pending_request_id: RequestId::Integer(7),
+                outgoing,
+                receiver,
+                request_permissions_guard,
+            },
+            Arc::clone(&bound.codex),
+            state,
+        )
+        .await;
+        // Ordered settings acknowledgement is a barrier after the auto-interrupt.
+        bound
+            .codex
+            .update_thread_settings(codex_protocol::protocol::ThreadSettingsOverrides::default())
+            .await?;
+        let mut answer = Envelope {
+            version: 1,
+            owner_id: "stop-owner".into(),
+            thread_id: id.to_string(),
+            runtime_generation: 1,
+            message: Message {
+                id: "answer".into(),
+                source: Source {
+                    kind: SourceKind::Service,
+                    id: "cutex-asks".into(),
+                },
+                event_type: "ANSWER".into(),
+                delivery: Delivery::AfterTurn,
+                text: "answer".into(),
+            },
+            semantic_sha256: String::new(),
+            view: None,
+        };
+        answer.semantic_sha256 = answer.digest();
+        assert_eq!(
+            bound
+                .codex
+                .submit_external_input_stop_answer(answer)
+                .await?,
+            Err(BusyReason::GateClosed)
+        );
+        assert!(
+            bound.codex.resume_external_input().await?,
+            "non-owner interrupt still closes the gate"
+        );
+        Ok(())
     }
 
     #[test]
@@ -3340,6 +3554,7 @@ mod tests {
             Event {
                 id: "turn-1".to_string(),
                 msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                    content_token_count: None,
                     thread_id: conversation_id,
                     turn_id: "turn-1".to_string(),
                     item: CoreTurnItem::SubAgentActivity(SubAgentActivityItem {
@@ -3494,6 +3709,17 @@ mod tests {
             ThreadId::new(),
         );
         let thread_state = new_thread_state();
+        handle_error(
+            conversation_id,
+            TurnError {
+                misalignment: None,
+                message: "conversation is not running".to_string(),
+                codex_error_info: Some(V2CodexErrorInfo::Other),
+                additional_details: None,
+            },
+            &thread_state,
+        )
+        .await;
         let event = turn_complete_event(&event_turn_id);
         {
             let mut state = thread_state.lock().await;
@@ -3512,9 +3738,11 @@ mod tests {
             state.track_current_turn_event(
                 &event_turn_id,
                 &EventMsg::ItemCompleted(ItemCompletedEvent {
+                    content_token_count: None,
                     thread_id: conversation_id,
                     turn_id: event_turn_id.clone(),
                     item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                        moderation: None,
                         id: "msg-1".to_string(),
                         content: vec![
                             CoreAgentMessageContent::Text {
@@ -3536,9 +3764,11 @@ mod tests {
             state.track_current_turn_event(
                 &event_turn_id,
                 &EventMsg::ItemCompleted(ItemCompletedEvent {
+                    content_token_count: None,
                     thread_id: conversation_id,
                     turn_id: event_turn_id.clone(),
                     item: CoreTurnItem::AgentMessage(CoreAgentMessageItem {
+                        moderation: None,
                         id: "msg-2".to_string(),
                         content: vec![CoreAgentMessageContent::Text {
                             text: "  ".to_string(),
@@ -3646,6 +3876,18 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event_turn_id = "complete_err1".to_string();
         let thread_state = new_thread_state();
+        thread_state.lock().await.track_current_turn_event(
+            &event_turn_id,
+            &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                turn_attribution: None,
+                turn_id: event_turn_id.clone(),
+                root_turn_id: None,
+                trace_id: None,
+                started_at: Some(42),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        );
         handle_error(
             conversation_id,
             TurnError {

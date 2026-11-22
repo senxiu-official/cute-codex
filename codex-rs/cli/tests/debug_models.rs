@@ -49,6 +49,9 @@ fn debug_models_capabilities_ignores_config_and_auth() -> Result<()> {
         .output()?;
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    pretty_assertions::assert_eq!(value, serde_json::json!({"modelVariants": true}));
+    pretty_assertions::assert_eq!(
+        value,
+        serde_json::json!({"modelVariants": true, "modelContextSettingsV1": true, "modelContextSettingsV2": true})
+    );
     Ok(())
 }

@@ -85,6 +85,8 @@ pub enum BusyReason {
     PendingTurnTrigger,
     /// The interruption gate is closed; see `thread/externalInput/resume`.
     GateClosed,
+    /// The effective tool gate is held (including an ancestor's gate).
+    ToolGate,
     /// Automatic turns do not run in Plan mode.
     PlanMode,
     /// The host is draining and admits no new turns.

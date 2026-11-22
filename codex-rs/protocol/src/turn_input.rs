@@ -55,6 +55,13 @@ pub struct ResponseItemAnnotations {
 }
 
 /// One turn input and the context that follows it through submission.
+#[derive(Clone, Debug)]
+pub struct OwnerInput {
+    pub client_user_message_id: String,
+    pub input: Vec<UserInput>,
+}
+
+/// One turn input and the context that follows it through submission.
 ///
 /// Callers choose start-or-steer, idle-start, or steer-only behavior through
 /// the corresponding `CodexThread` method.
@@ -62,11 +69,20 @@ pub struct ResponseItemAnnotations {
 pub struct TurnInputRequest {
     start_origin: TurnStartOrigin,
     pub input: TurnInput,
+    /// Ordered original owner messages preceding `input`. Some([]) opts into
+    /// atomic idle-only batch admission; None preserves legacy start-or-steer.
+    pub owner_inputs: Option<Vec<OwnerInput>>,
+    /// Per-request, in-process receipt set immediately before durable batch admission.
+    /// This is not wire input and cannot grant admission authority.
+    pub owner_input_batch_admission: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Trusted external envelopes bound to this specific owner-input boundary.
     pub owner_carries: Vec<crate::external_input::Envelope>,
     /// Optional host-assigned UUID for the Responses message created from [`TurnInput::UserInput`].
     /// Ignored for all other inputs, including raw user-role Responses items.
     pub user_item_uuid: Option<uuid::Uuid>,
+    /// Host-supplied, extension-keyed data for this user input's completion.
+    /// Travels with the individual input and is never included in model input.
+    pub user_input_extension_data: BTreeMap<String, Value>,
     pub thread_settings: ThreadSettingsOverrides,
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
@@ -115,6 +131,8 @@ pub struct RecoverTurnRequest {
     pub turn_id: String,
     pub thread_settings: ThreadSettingsOverrides,
     pub trace: Option<W3cTraceContext>,
+    /// Cache lifetime to reapply when resuming this turn.
+    pub prompt_cache_ttl: Option<PromptCacheTtl>,
     /// Program recorded in the interrupted turn's persisted context.
     pub cyber_access_program: Option<CyberAccessProgram>,
 }
@@ -125,8 +143,11 @@ impl TurnInputRequest {
         Self {
             start_origin: TurnStartOrigin::Explicit,
             input,
+            owner_inputs: None,
+            owner_input_batch_admission: None,
             owner_carries: Vec::new(),
             user_item_uuid: None,
+            user_input_extension_data: BTreeMap::new(),
             thread_settings: ThreadSettingsOverrides::default(),
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),
@@ -137,6 +158,19 @@ impl TurnInputRequest {
 
     pub fn with_owner_carries(mut self, envelopes: Vec<crate::external_input::Envelope>) -> Self {
         self.owner_carries = envelopes;
+        self
+    }
+
+    pub fn with_owner_inputs(mut self, inputs: Option<Vec<OwnerInput>>) -> Self {
+        self.owner_inputs = inputs;
+        self
+    }
+
+    pub fn with_owner_input_batch_admission(
+        mut self,
+        receipt: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.owner_input_batch_admission = Some(receipt);
         self
     }
 
@@ -242,6 +276,15 @@ pub enum CyberAccessProgram {
     DaybreakRed,
 }
 
+/// Minimum lifetime requested for new prompt cache entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PromptCacheTtl {
+    #[serde(rename = "30m")]
+    ThirtyMinutes,
+    #[serde(rename = "12h")]
+    TwelveHours,
+}
+
 /// Options for the new-turn branch of a submission.
 ///
 /// Core only records these options when input starts a turn. When input steers,
@@ -256,8 +299,13 @@ pub struct TurnStartOptions {
     /// Structured-output schema for a new turn. When steering, Core rejects
     /// the input if the active turn uses a different schema.
     pub final_output_json_schema: Option<Value>,
+    /// Direct-only tool namespaces for a new turn. Omission inherits the thread's
+    /// configuration. An empty list clears it for this turn. Ignored when steering.
+    pub direct_only_tool_namespaces: Option<Vec<String>>,
     /// Service tier for a new turn, without changing the thread's preference.
     pub service_tier: Option<String>,
+    /// Lifetime requested for new Responses prompt cache entries during this turn.
+    pub prompt_cache_ttl: Option<PromptCacheTtl>,
     /// Parent turn lineage recorded if this request starts a new turn.
     pub parent_turn_id: Option<String>,
     /// Agent owning the parent turn, retained when recovering delegated work.
@@ -277,6 +325,9 @@ pub struct TurnStartOptions {
 /// resolved causal root, including when steering preserves an existing turn.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TurnInputSubmission {
+    /// Core accepted an agent follow-up through native message delivery. The
+    /// receiving turn may still be running or finishing, so no turn ID is implied.
+    Accepted,
     /// Core started a turn. Persistent thread settings and start options were applied.
     Started {
         turn_id: String,
@@ -319,6 +370,12 @@ pub enum SteerSubmission {
 /// Why Core did not accept submitted turn input for turn processing.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NotSubmittedReason {
+    /// Batch history cannot currently prove safe admission; no admission was attempted.
+    OwnerInputBatchHistoryUnavailable,
+    /// An earlier batch left the session unsafe; this new request was not admitted.
+    OwnerInputBatchRecoveryRequired,
+    /// A prompt hook blocked the entire batch before durable admission.
+    OwnerInputBatchHookBlocked,
     /// New work superseded the expected previous turn of an internal continuation.
     Superseded,
 

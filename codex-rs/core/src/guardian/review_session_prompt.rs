@@ -41,17 +41,25 @@ pub(super) async fn build_guardian_prompt_items(
         reviewed_node_repl_evidence_sequence,
     )
     .await?;
-    let context_window = model_info.resolved_context_window().map(|supported| {
+    let nominal_window = if params.spawn_config.model_context_settings_v1 {
+        model_info.budget_context_window()
+    } else {
+        model_info.resolved_context_window()
+    };
+    let context_window = nominal_window.map(|supported| {
         params
             .spawn_config
-            .model_context_window
+            .legacy_context_window_override()
             .unwrap_or(supported)
             .min(supported)
             .saturating_mul(model_info.effective_context_window_percent.clamp(0, 100))
             / 100
     });
-    let context_window =
-        context_window.filter(|limit| *limit > 0 && model_info.origin != ModelOrigin::Synthetic);
+    let context_window = context_window.filter(|limit| {
+        *limit > 0
+            && (params.spawn_config.model_context_settings_v1
+                || model_info.origin != ModelOrigin::Synthetic)
+    });
     let image_mode = if unified_image_budget_enabled(&params.spawn_config.features, model_info) {
         ImagePreparationMode::UnifiedBudget
     } else {
@@ -79,6 +87,7 @@ pub(super) async fn build_guardian_prompt_items(
         &collected.session_id,
         collected.node_repl_evidence_sequence,
         codex_guardian_context::SyncPreparation {
+            budgeting: params.spawn_config.guardian_context_budgeting(),
             reviewer_history: reviewer_history.annotated_items(),
             context_window,
             history_tokens,

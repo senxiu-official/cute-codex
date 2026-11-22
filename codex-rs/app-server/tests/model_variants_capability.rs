@@ -19,7 +19,7 @@ fn model_variants_capability_does_not_load_config_or_auth() -> Result<()> {
     assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
-        serde_json::json!({"modelVariants": true})
+        serde_json::json!({"modelVariants": true, "modelContextSettingsV1": true, "modelContextSettingsV2": true})
     );
     Ok(())
 }

@@ -41,6 +41,11 @@ mod memento_v2;
 pub use memento_v2::ContextManagementToolMessages;
 pub use memento_v2::HistoryToolMessages;
 pub use memento_v2::NotesToolMessages;
+mod plugins;
+pub use plugins::GenericPluginMessages;
+pub use plugins::PluginMessages;
+pub use plugins::PluginRecommendationMessages;
+pub use plugins::SelectedPluginMessages;
 #[path = "openai_models/guardian.rs"]
 mod guardian;
 pub use guardian::GuardianModelPolicy;
@@ -54,6 +59,7 @@ mod guardian_v2;
 mod reasoning_effort;
 
 pub use access_programs::ModelAccessPrograms;
+pub use access_programs::SavedDaybreakChoice;
 pub use guardian_v2::AsyncClassifierMode;
 pub use guardian_v2::GuardianV2ModelConfig;
 pub use guardian_v2::GuardianV2TranscriptModelConfig;
@@ -343,6 +349,14 @@ pub enum WebSearchToolType {
     TextAndImage,
 }
 
+/// Provider preference selected by the resolved model catalog entry.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchProvider {
+    Standalone,
+    SearchMcp,
+}
+
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -409,6 +423,40 @@ const fn is_true(value: &bool) -> bool {
     *value
 }
 
+/// One independently inherited context window and atomic compaction category.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelContextSettingsValues {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_auto_compact_percent"
+    )]
+    #[schemars(range(min = 1, max = 100))]
+    pub auto_compact_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact_token_limit: Option<i64>,
+}
+
+impl ModelContextSettingsValues {
+    pub fn compact_setting(&self) -> Option<(Option<u8>, Option<i64>)> {
+        (self.auto_compact_percent.is_some() || self.auto_compact_token_limit.is_some())
+            .then_some((self.auto_compact_percent, self.auto_compact_token_limit))
+    }
+}
+
+/// Catalog defaults, owner choices and migration preservation remain separate on the wire.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelContextSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<ModelContextSettingsValues>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<ModelContextSettingsValues>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserved: Option<ModelContextSettingsValues>,
+}
+
 /// Model metadata returned by the Codex backend `/models` endpoint.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
@@ -458,6 +506,8 @@ pub struct ModelInfo {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     #[serde(default)]
     pub web_search_tool_type: WebSearchToolType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search_provider: Option<WebSearchProvider>,
     pub truncation_policy: TruncationPolicyConfig,
     #[serde(default)]
     pub supports_image_detail_original: bool,
@@ -466,11 +516,27 @@ pub struct ModelInfo {
     /// Maximum context window allowed for config overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_window: Option<i64>,
+    /// Layered context metadata. Flat-only rows supply catalog defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_settings: Option<ModelContextSettings>,
+    /// Runtime-only last resort for compaction and Guardian budgets, not known capacity.
+    #[serde(skip)]
+    #[ts(skip)]
+    #[schemars(skip)]
+    pub runtime_context_window_fallback: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
     /// from `context_window` (90%). When provided, core clamps it to 90% of the
     /// context window when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact_token_limit: Option<i64>,
+    /// Percentage of the resolved nominal window used for automatic compaction.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_auto_compact_percent"
+    )]
+    #[schemars(range(min = 1, max = 100))]
+    pub auto_compact_percent: Option<u8>,
     /// Opaque identifier for compaction-compatible model configurations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,
@@ -518,6 +584,23 @@ pub struct ModelInfo {
     pub multi_agent_reasoning_effort: Option<ReasoningEffort>,
 }
 
+pub fn percent_of_context_window(window: i64, percent: u8) -> i64 {
+    (i128::from(window) * i128::from(percent) / 100) as i64
+}
+
+pub fn deserialize_auto_compact_percent<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let percent = Option::<u8>::deserialize(deserializer)?;
+    if percent.is_some_and(|p| !(1..=100).contains(&p)) {
+        return Err(D::Error::custom(
+            "auto-compaction percent must be between 1 and 100",
+        ));
+    }
+    Ok(percent)
+}
+
 /// Where model metadata was obtained during local catalog resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelOrigin {
@@ -552,6 +635,52 @@ impl std::ops::DerefMut for CatalogModel {
 }
 
 impl ModelInfo {
+    pub fn validate_context_settings(&self) -> Result<(), String> {
+        if let Some(settings) = &self.context_settings {
+            for (level, values) in [
+                ("catalog", settings.catalog.as_ref()),
+                ("owner", settings.owner.as_ref()),
+                ("preserved", settings.preserved.as_ref()),
+            ] {
+                if let Some(values) = values {
+                    if values.auto_compact_percent.is_some()
+                        && values.auto_compact_token_limit.is_some()
+                    {
+                        return Err(format!(
+                            "model `{}` context_settings.{level} cannot set both auto_compact_percent and auto_compact_token_limit",
+                            self.slug
+                        ));
+                    }
+                    if values
+                        .auto_compact_percent
+                        .is_some_and(|p| !(1..=100).contains(&p))
+                    {
+                        return Err(format!(
+                            "model `{}` context_settings.{level} auto_compact_percent must be between 1 and 100",
+                            self.slug
+                        ));
+                    }
+                }
+            }
+        }
+        if self.auto_compact_percent.is_some() && self.auto_compact_token_limit.is_some() {
+            return Err(format!(
+                "model `{}` cannot set both auto_compact_percent and auto_compact_token_limit",
+                self.slug
+            ));
+        }
+        if self
+            .auto_compact_percent
+            .is_some_and(|p| !(1..=100).contains(&p))
+        {
+            return Err(format!(
+                "model `{}` auto_compact_percent must be between 1 and 100",
+                self.slug
+            ));
+        }
+        Ok(())
+    }
+
     /// Model identifier sent to inference endpoints, independently of the local selection name.
     pub fn request_model(&self) -> &str {
         self.request_model.as_deref().unwrap_or(&self.slug)
@@ -559,6 +688,12 @@ impl ModelInfo {
 
     pub fn resolved_context_window(&self) -> Option<i64> {
         self.context_window.or(self.max_context_window)
+    }
+
+    /// Nominal window for internal budgets; a fallback never overrides a resolved window.
+    pub fn budget_context_window(&self) -> Option<i64> {
+        self.resolved_context_window()
+            .or(self.runtime_context_window_fallback)
     }
 
     /// Context available to inference after reserving this model's configured headroom.
@@ -570,9 +705,15 @@ impl ModelInfo {
 
     pub fn auto_compact_token_limit(&self) -> Option<i64> {
         let context_limit = self
-            .resolved_context_window()
-            .map(|context_window| (context_window * 9) / 10);
-        let config_limit = self.auto_compact_token_limit;
+            .budget_context_window()
+            .map(|context_window| percent_of_context_window(context_window, 90));
+        let config_limit = self
+            .auto_compact_percent
+            .and_then(|percent| {
+                self.budget_context_window()
+                    .map(|window| percent_of_context_window(window, percent))
+            })
+            .or(self.auto_compact_token_limit);
         if let Some(context_limit) = context_limit {
             return Some(
                 config_limit.map_or(context_limit, |limit| std::cmp::min(limit, context_limit)),
@@ -591,6 +732,9 @@ pub struct ModelMessages {
     /// Optional model-owned Apps wording, transported without runtime interpretation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps: Option<AppsMessages>,
+    /// Model-owned plugin wording; runtime capability facts and eligibility remain client-owned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<PluginMessages>,
     /// Developer guidance after a content-filter block. Missing, null, blank, or values over
     /// 512 UTF-8 bytes use the bundled guidance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1066,6 +1210,9 @@ where
                      `model_messages.instructions_template`"
                 )));
             }
+            model
+                .validate_context_settings()
+                .map_err(D::Error::custom)?;
             Ok(model)
         })
         .collect()
@@ -1213,11 +1360,15 @@ mod tests {
             default_verbosity: None,
             apply_patch_tool_type: None,
             web_search_tool_type: WebSearchToolType::Text,
+            web_search_provider: None,
             truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
             supports_image_detail_original: false,
             context_window: None,
             max_context_window: None,
             auto_compact_token_limit: None,
+            auto_compact_percent: None,
+            runtime_context_window_fallback: None,
+            context_settings: None,
             comp_hash: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
@@ -1699,6 +1850,22 @@ mod tests {
     }
 
     #[test]
+    fn models_response_tolerates_overlay_reserved_model_ids() {
+        let expected = ModelsResponse {
+            models: vec![test_model(Some(ModelMessages {
+                instructions_template: Some("test instructions".to_string()),
+                ..Default::default()
+            }))],
+        };
+        let mut value = serde_json::to_value(&expected).expect("serialize models response");
+        value["reserved_model_ids"] = serde_json::json!(["gpt-6.2-sol", "gpt-6.2-astra"]);
+
+        let actual: ModelsResponse =
+            serde_json::from_value(value).expect("deserialize overlay catalog metadata");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn models_response_promotes_legacy_base_instructions() {
         let mut value = serde_json::to_value(ModelsResponse {
             models: vec![test_model(/*spec*/ None)],
@@ -1773,6 +1940,7 @@ mod tests {
             apps: Some(AppsMessages {
                 usage_instructions: Some("Literal Apps {{guidance}}".to_string()),
             }),
+            plugins: None,
             content_filter_guidance: Some("Offer a permitted alternative.".to_string()),
             persistent_instructions: Some("Persistent catalog instructions".to_string()),
             tools: Some(ToolMessages {
@@ -2146,6 +2314,9 @@ mod tests {
             context_window: Some(272_000),
             max_context_window: Some(400_000),
             auto_compact_token_limit: Some(250_000),
+            auto_compact_percent: None,
+            runtime_context_window_fallback: None,
+            context_settings: None,
             effective_context_window_percent: 95,
             ..test_model(/*spec*/ None)
         };
@@ -2158,6 +2329,93 @@ mod tests {
             ),
             (Some(272_000), Some(258_400), Some(244_800))
         );
+    }
+
+    #[test]
+    fn model_context_v2_layer_validation_and_metadata_round_trip() {
+        let model = test_model(Some(ModelMessages {
+            instructions_template: Some("test".into()),
+            ..Default::default()
+        }));
+        for level in ["catalog", "owner", "preserved"] {
+            for value in [
+                serde_json::json!({"auto_compact_percent":0}),
+                serde_json::json!({"auto_compact_percent":101}),
+                serde_json::json!({"auto_compact_percent":50,"auto_compact_token_limit":100}),
+            ] {
+                let mut wire = serde_json::to_value(&model).unwrap();
+                wire["context_settings"] = serde_json::json!({(level):value});
+                assert!(
+                    serde_json::from_value::<ModelsResponse>(serde_json::json!({"models":[wire]}))
+                        .is_err(),
+                    "{level}"
+                );
+            }
+        }
+        let mut wire = serde_json::to_value(&model).unwrap();
+        wire["context_settings"] = serde_json::json!({"catalog":{"context_window":128000,"auto_compact_token_limit":90000},"owner":{"context_window":160000,"auto_compact_percent":50},"preserved":{"auto_compact_token_limit":150000}});
+        let decoded: ModelsResponse =
+            serde_json::from_value(serde_json::json!({"models":[wire.clone()]})).unwrap();
+        assert_eq!(
+            serde_json::to_value(&decoded.models[0]).unwrap()["context_settings"],
+            wire["context_settings"]
+        );
+    }
+
+    #[test]
+    fn model_context_v1_budget_hint_is_runtime_only() {
+        let mut model = test_model(None);
+        model.runtime_context_window_fallback = Some(272_000);
+        assert_eq!(model.resolved_context_window(), None);
+        assert_eq!(model.usable_context_window(), None);
+        assert_eq!(model.auto_compact_token_limit(), Some(244_800));
+        let mut wire = serde_json::to_value(&model).unwrap();
+        assert!(wire.get("runtime_context_window_fallback").is_none());
+        wire["runtime_context_window_fallback"] = serde_json::json!(1000);
+        let decoded: ModelInfo = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded.runtime_context_window_fallback, None);
+        assert_eq!(decoded.auto_compact_token_limit(), None);
+    }
+
+    #[test]
+    fn model_context_v1_catalog_rejects_conflicts_and_invalid_percentages() {
+        let model = test_model(Some(ModelMessages {
+            instructions_template: Some("test".into()),
+            ..Default::default()
+        }));
+        let mut value = serde_json::to_value(&model).unwrap();
+        for percent in [0, 101, 255] {
+            value["auto_compact_percent"] = serde_json::json!(percent);
+            assert!(
+                serde_json::from_value::<ModelsResponse>(
+                    serde_json::json!({"models":[value.clone()]})
+                )
+                .is_err()
+            );
+        }
+        value["auto_compact_percent"] = serde_json::json!(75);
+        value["auto_compact_token_limit"] = serde_json::json!(100);
+        let error = serde_json::from_value::<ModelsResponse>(serde_json::json!({"models":[value]}))
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot set both"));
+    }
+
+    #[test]
+    fn model_context_v1_percent_uses_nominal_window_and_safe_integer_math() {
+        let mut model = test_model(None);
+        model.context_window = Some(1000);
+        model.auto_compact_percent = Some(80);
+        assert_eq!(model.usable_context_window(), Some(950));
+        assert_eq!(model.auto_compact_token_limit(), Some(800));
+        model.auto_compact_percent = Some(100);
+        assert_eq!(model.auto_compact_token_limit(), Some(900));
+        model.context_window = Some(i64::MAX);
+        assert_eq!(
+            model.auto_compact_token_limit(),
+            Some((i128::from(i64::MAX) * 90 / 100) as i64)
+        );
+        model.context_window = None;
+        assert_eq!(model.auto_compact_token_limit(), None);
     }
 
     #[test]

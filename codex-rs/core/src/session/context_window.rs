@@ -69,9 +69,7 @@ async fn context_window_token_status_with_config(
                 let window = sess.auto_compact_window_snapshot().await;
                 let baseline = window.prefill_input_tokens.unwrap_or(active_context_tokens);
 
-                let scope_limit = config
-                    .model_auto_compact_token_limit
-                    .or_else(|| model_info.auto_compact_token_limit());
+                let scope_limit = prefix_auto_compact_limit(config, model_info);
                 (
                     active_context_tokens.saturating_sub(baseline),
                     scope_limit,
@@ -80,8 +78,8 @@ async fn context_window_token_status_with_config(
             }
         };
 
-    // The model's full context window is a hard cap, independent of the auto-compaction scope.
-    let full_context_window_limit = model_info.resolved_context_window().map(|context_window| {
+    // The outer compaction budget also applies when only a runtime fallback is known.
+    let full_context_window_limit = model_info.budget_context_window().map(|context_window| {
         context_window.saturating_mul(model_info.effective_context_window_percent) / 100
     });
 
@@ -126,5 +124,45 @@ async fn context_window_token_status_with_config(
         full_context_window_limit_reached,
         token_limit_reached,
         turn_end_compaction_threshold_reached,
+    }
+}
+
+fn prefix_auto_compact_limit(config: &Config, model_info: &ModelInfo) -> Option<i64> {
+    if config.model_context_settings_v1 {
+        model_info.auto_compact_token_limit()
+    } else {
+        config
+            .model_auto_compact_token_limit
+            .or_else(|| model_info.auto_compact_token_limit())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn model_context_v1_prefix_scope_does_not_reapply_profile_absolute_limit() {
+        let mut config = crate::config::test_config().await;
+        config.model_auto_compact_token_limit = Some(100);
+        let mut row = codex_models_manager::model_info::model_info_from_slug("test");
+        row.context_window = Some(1000);
+        row.auto_compact_percent = Some(75);
+        row.context_settings = Some(codex_protocol::openai_models::ModelContextSettings {
+            owner: Some(codex_protocol::openai_models::ModelContextSettingsValues {
+                context_window: Some(1000),
+                auto_compact_percent: Some(75),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        for (v1, expected) in [(false, 100), (true, 750)] {
+            config.model_context_settings_v1 = v1;
+            let model = codex_models_manager::model_info::with_config_overrides(
+                row.clone(),
+                &config.to_models_manager_config(),
+            );
+            assert_eq!(prefix_auto_compact_limit(&config, &model), Some(expected));
+        }
     }
 }

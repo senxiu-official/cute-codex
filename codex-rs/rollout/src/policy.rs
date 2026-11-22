@@ -468,6 +468,7 @@ mod generated_image_persistence_tests {
 
     fn completed(saved_path: Option<AbsolutePathBuf>, result: &str) -> RolloutItem {
         RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            content_token_count: None,
             thread_id: ThreadId::new(),
             turn_id: "turn-1".to_string(),
             item: TurnItem::Extension(ExtensionItem::ImageGeneration(ImageGenerationItem {

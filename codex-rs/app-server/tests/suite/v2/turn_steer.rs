@@ -103,6 +103,7 @@ async fn turn_steer_requires_active_turn() -> Result<()> {
 
     let malformed_request = mcp
         .send_turn_steer_request(TurnSteerParams {
+            owner_carries: None,
             thread_id: thread.id,
             client_user_message_id: None,
             input: vec![V2UserInput::Text {
@@ -561,11 +562,7 @@ async fn turn_steer_rejects_context_only_input_without_merging_context() -> Resu
     let body = response_requests[1]
         .body_json::<Value>()
         .context("request body should be JSON")?;
-    assert!(
-        !body
-            .to_string()
-            .contains("<external_browser_info>tab one</external_browser_info>")
-    );
+    assert!(!body.to_string().contains("tab one"));
 
     Ok(())
 }

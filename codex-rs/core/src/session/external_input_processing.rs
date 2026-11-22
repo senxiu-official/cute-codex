@@ -48,7 +48,7 @@ impl Session {
                 .zip(current_turn.as_ref())
                 .is_some_and(|(old, current)| std::sync::Arc::ptr_eq(old, current));
             if matches!(found.processing, Processing::Pending(_))
-                && (!runtime.paused || runtime.permits.contains(id))
+                && runtime.processing_allowed(id, current_turn.as_ref())
                 && !excluded
                 && !input.contains(&found.commit.envelope.response_item()?)
             {
@@ -87,9 +87,14 @@ impl Session {
             "canonical external input missing from effective request"
         );
         let mut claims = Vec::new();
+        let stop_answer = runtime.stop_answer_key(current_turn.as_ref()).cloned();
         for (id, found) in &mut runtime.recovery.messages {
             if !matches!(found.processing, Processing::Pending(_))
-                || (runtime.paused && !runtime.permits.contains(id))
+                || if let Some(key) = &stop_answer {
+                    key.message_id != *id || (runtime.paused && !runtime.stopped)
+                } else {
+                    runtime.paused && !runtime.permits.contains(id)
+                }
                 || runtime
                     .retry_exclusions
                     .get(id)
@@ -236,18 +241,40 @@ impl Session {
             .await
     }
 
+    /// Returns whether the gate changed.
+    pub(crate) async fn external_input_gate(&self, paused: bool) -> Result<bool> {
+        self.set_external_input_gate(paused, false).await
+    }
+
+    pub(crate) async fn stop_external_input(&self) -> Result<bool> {
+        self.set_external_input_gate(true, true).await
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "the interruption gate must stay locked through durable publication"
     )]
-    /// Returns whether the gate changed.
-    pub(crate) async fn external_input_gate(&self, paused: bool) -> Result<bool> {
+    async fn set_external_input_gate(&self, paused: bool, owner_stop: bool) -> Result<bool> {
         let mut state = self.external_input.lock().await;
+        self.set_external_input_gate_locked(&mut state, paused, owner_stop)
+            .await
+    }
+
+    pub(crate) async fn set_external_input_gate_locked(
+        &self,
+        state: &mut Option<crate::external_input::Runtime>,
+        paused: bool,
+        owner_stop: bool,
+    ) -> Result<bool> {
         let Some(runtime) = state.as_mut() else {
             return Ok(false);
         };
         ensure!(!runtime.poisoned, "external input recovery required");
         if runtime.paused == paused {
+            // Stop never overrides an ordinary pause or a restored gate.
+            if !owner_stop {
+                runtime.stopped = false;
+            }
             return Ok(false);
         }
         runtime.poisoned = true;
@@ -263,6 +290,7 @@ impl Session {
         )
         .await?;
         runtime.paused = paused;
+        runtime.stopped = paused && owner_stop;
         runtime.poisoned = false;
         Ok(true)
     }

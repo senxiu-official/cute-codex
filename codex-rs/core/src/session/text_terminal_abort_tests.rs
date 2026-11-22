@@ -122,7 +122,7 @@ impl SessionTask for StuckTextTask {
                     .record_conversation_items(&turn, turn.model_info(), &[raw])
                     .await;
                 session
-                    .emit_turn_item_completed_in_commit(&turn, item)
+                    .emit_turn_item_completed_in_commit(&turn, item, /*content_token_count*/ None)
                     .await;
                 session.flush_rollout().await.unwrap();
             }
@@ -137,6 +137,7 @@ impl SessionTask for StuckTextTask {
                     .send_event_inner(
                         &turn,
                         EventMsg::ItemCompleted(ItemCompletedEvent {
+                            content_token_count: None,
                             thread_id: session.thread_id,
                             turn_id: turn.sub_id.clone(),
                             item,

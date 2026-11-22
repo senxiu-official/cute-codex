@@ -512,8 +512,7 @@ web_search = true
         cfg.tools,
         Some(ToolsToml {
             web_search: None,
-            experimental_request_user_input: None,
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -532,8 +531,7 @@ web_search = false
         cfg.tools,
         Some(ToolsToml {
             web_search: None,
-            experimental_request_user_input: None,
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -550,9 +548,8 @@ fn tools_experimental_request_user_input_defaults_to_enabled() {
     assert_eq!(
         cfg.tools,
         Some(ToolsToml {
-            web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: true }),
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -570,9 +567,8 @@ enabled = false
     assert_eq!(
         cfg.tools,
         Some(ToolsToml {
-            web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: false }),
-            update_plan: None,
+            ..Default::default()
         })
     );
 }
@@ -588,6 +584,7 @@ async fn load_config_resolves_experimental_request_user_input_enabled() -> std::
                     enabled: false,
                 }),
                 update_plan: None,
+                ..Default::default()
             }),
             ..ConfigToml::default()
         },
@@ -1412,6 +1409,7 @@ fn config_toml_deserializes_model_availability_nux() {
     assert_eq!(
         cfg.tui.expect("tui config should deserialize"),
         Tui {
+            default_hosts: Default::default(),
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             screen_reader_detection_done: None,
@@ -1425,6 +1423,8 @@ fn config_toml_deserializes_model_availability_nux() {
             question_esc_back: true,
             raw_output_mode: false,
             fullscreen_transcript: true,
+            collapse_turn_details: false,
+            sidebar_width_percent: None,
             mouse_scroll_speed: None,
             copy_on_select: Default::default(),
             copy_on_select_clear_selection: false,
@@ -2223,7 +2223,9 @@ respect_system_proxy = true
         codex_http_client::OutboundProxyPolicy::RespectSystemProxy
     );
     assert_eq!(
-        config.plugins_config_input().remote_plugin_service_config(),
+        config
+            .plugins_config_input()
+            .remote_plugin_service_config(/*runtime_auth*/ None),
         codex_core_plugins::remote::RemotePluginServiceConfig::new(
             config.chatgpt_base_url,
             codex_http_client::HttpClientFactory::new(
@@ -2251,6 +2253,7 @@ respect_system_proxy = true
     let disabled = Sourced::new(
         FeatureRequirementsToml {
             entries: BTreeMap::from([("respect_system_proxy".to_string(), false)]),
+            ..Default::default()
         },
         RequirementSource::Unknown,
     );
@@ -2273,6 +2276,7 @@ respect_system_proxy = true
     let enabled = Sourced::new(
         FeatureRequirementsToml {
             entries: BTreeMap::from([("respect_system_proxy".to_string(), true)]),
+            ..Default::default()
         },
         RequirementSource::Unknown,
     );
@@ -2374,6 +2378,7 @@ async fn system_proxy_fallback_honors_feature_requirements() -> std::io::Result<
         let requirements = Sourced::new(
             FeatureRequirementsToml {
                 entries: BTreeMap::from([("system_proxy_fallback".to_string(), required)]),
+                ..Default::default()
             },
             RequirementSource::Unknown,
         );
@@ -4773,6 +4778,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
     assert_eq!(
         tui,
         Tui {
+            default_hosts: Default::default(),
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
             screen_reader_detection_done: None,
@@ -4786,6 +4792,8 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             question_esc_back: true,
             raw_output_mode: false,
             fullscreen_transcript: true,
+            collapse_turn_details: false,
+            sidebar_width_percent: None,
             mouse_scroll_speed: None,
             copy_on_select: Default::default(),
             copy_on_select_clear_selection: false,
@@ -8897,29 +8905,19 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
 }
 
 #[test]
-fn config_toml_deserializes_auto_review_policy_and_template() {
+fn config_toml_deserializes_auto_review_policy() {
     let cfg = toml::from_str::<ConfigToml>(
         r#"
 [auto_review]
 policy = "Use the user-configured guardian policy."
-extra_policy = "Use the user-configured additional policy."
-experimental_policy_template = "Configured template: {{ tenant_policy_config }}"
 "#,
     )
     .expect("TOML deserialization should succeed");
 
     let auto_review = cfg.auto_review.as_ref().expect("auto-review config");
     assert_eq!(
-        (
-            auto_review.policy.as_deref(),
-            auto_review.extra_policy.as_deref(),
-            auto_review.experimental_policy_template.as_deref(),
-        ),
-        (
-            Some("Use the user-configured guardian policy."),
-            Some("Use the user-configured additional policy."),
-            Some("Configured template: {{ tenant_policy_config }}"),
-        )
+        auto_review.policy.as_deref(),
+        Some("Use the user-configured guardian policy.")
     );
 }
 
@@ -8929,7 +8927,7 @@ experimental_policy_template = "Configured template: {{ tenant_policy_config }}"
 #[test_case::test_case("[guardianv2]\nasync_classifier_mode = 'snapshot'", codex_protocol::TranscriptFormat::Line; "legacy_snapshot")]
 #[test_case::test_case("[guardianv2]\nasync_classifier_mode = 'conversation'", codex_protocol::TranscriptFormat::Line; "legacy_conversation")]
 #[tokio::test]
-async fn load_config_uses_auto_review_guardian_policy_config_and_template(
+async fn load_config_uses_auto_review_guardian_policy_config(
     features: &str,
     expected_mode: codex_protocol::TranscriptFormat,
 ) -> std::io::Result<()> {
@@ -8937,15 +8935,8 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template(
     let cfg = ConfigToml {
         features: Some(toml::from_str(features).unwrap()),
         auto_review: Some(AutoReviewToml {
-            timeout_ms: None,
-            circuit_break_action: None,
             policy: Some("  Use the user-configured guardian policy.  ".to_string()),
-            extra_policy: Some("  Use the user-configured additional policy.  ".to_string()),
-            experimental_policy_template: Some(
-                "  Configured template: {{ tenant_policy_config }}  ".to_string(),
-            ),
-            experimental_conversation_history_prompt: None,
-            conversation_history_max_output_tokens: None,
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -8964,14 +8955,10 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template(
         (
             config.guardian_transcript_mode,
             config.guardian_policy_config.as_deref(),
-            config.guardian_extra_policy.as_deref(),
-            config.guardian_policy_template.as_deref(),
         ),
         (
             expected_mode,
             Some("Use the user-configured guardian policy."),
-            Some("Use the user-configured additional policy."),
-            Some("Configured template: {{ tenant_policy_config }}"),
         )
     );
 
@@ -8985,15 +8972,63 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template(
 }
 
 #[tokio::test]
+async fn sync_elastic_budget_is_opt_in_and_validated() {
+    let excessive_minimum = codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS + 1;
+    let minimum_mismatch = format!(
+        r#"[features.guardianv2.sync_elastic_sections.root_conversation_messages]
+min_total_section_tokens = {excessive_minimum}
+max_section_entry_tokens = 1
+"#
+    );
+    let maximum_below_minimum = r#"[features.guardianv2.sync_elastic_sections.root_conversation_messages]
+min_total_section_tokens = 1
+max_section_entry_tokens = 1
+max_total_section_tokens = 0
+"#;
+    let home = TempDir::new().unwrap();
+    for sections in [
+        r#"[features.guardianv2.sync_elastic_sections.transcript_tools]
+min_total_section_tokens = 1
+max_section_entry_tokens = 0
+"#,
+        maximum_below_minimum,
+        minimum_mismatch.as_str(),
+        r#"[features.guardianv2.sync_elastic_sections.root_messages]
+min_total_section_tokens = 1
+max_section_entry_tokens = 1
+[features.guardianv2.sync_elastic_sections.root_conversation_messages]
+min_total_section_tokens = 1
+max_section_entry_tokens = 1
+"#,
+    ] {
+        for enabled in [false, true] {
+            let result = Config::load_from_base_config_with_overrides(
+                toml::from_str(&format!(
+                    "[features.guardianv2]\nenabled = false\nsync_elastic_budgeting = {enabled}\n{sections}"
+                ))
+                .unwrap(),
+                ConfigOverrides {
+                    cwd: Some(home.path().to_path_buf()),
+                    ..Default::default()
+                },
+                home.abs(),
+            )
+            .await;
+            assert_eq!(result.is_err(), enabled);
+        }
+    }
+}
+
+#[tokio::test]
 async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     for (managed_extra, expected_extra) in [
         (
             Some("  Use the managed additional policy.  "),
-            "Use the managed additional policy.",
+            Some("Use the managed additional policy."),
         ),
-        (Some("   "), "Use the user-configured additional policy."),
-        (None, "Use the user-configured additional policy."),
+        (Some("   "), None),
+        (None, None),
     ] {
         let config_layer_stack = ConfigLayerStack::new(
             Vec::new(),
@@ -9007,13 +9042,8 @@ async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()>
         .map_err(std::io::Error::other)?;
         let cfg = ConfigToml {
             auto_review: Some(AutoReviewToml {
-                timeout_ms: None,
-                circuit_break_action: None,
                 policy: Some("Use the user-configured guardian policy.".to_string()),
-                extra_policy: Some("Use the user-configured additional policy.".to_string()),
-                experimental_policy_template: None,
-                experimental_conversation_history_prompt: None,
-                conversation_history_max_output_tokens: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -9035,10 +9065,7 @@ async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()>
                 config.guardian_policy_config.as_deref(),
                 config.guardian_extra_policy.as_deref(),
             ),
-            (
-                Some("Use the managed guardian policy."),
-                Some(expected_extra),
-            )
+            (Some("Use the managed guardian policy."), expected_extra,)
         );
     }
     Ok(())
@@ -9049,13 +9076,9 @@ async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
         auto_review: Some(AutoReviewToml {
-            timeout_ms: None,
-            circuit_break_action: None,
             policy: Some("   ".to_string()),
-            extra_policy: Some("   ".to_string()),
-            experimental_policy_template: None,
             experimental_conversation_history_prompt: Some(String::new()),
-            conversation_history_max_output_tokens: None,
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -10067,6 +10090,27 @@ job_max_runtime_seconds = 900
             ..Default::default()
         })
     );
+}
+
+#[tokio::test]
+async fn legacy_multi_agent_opt_out_survives_a_session_override() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join(CONFIG_TOML_FILE),
+        "[features]\nmulti_agent = false\n",
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .cli_overrides(vec![("features.multi_agent".to_string(), true.into())])
+        .build()
+        .await?;
+    assert!(config.features.enabled(Feature::Collab));
+    assert_eq!(
+        legacy_multi_agent_disabled_sources(&config.config_layer_stack),
+        ["user"]
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -12401,6 +12445,7 @@ fn retired_feature_requirements_do_not_pin_configured_values(
                     (key.to_string(), required),
                     ("shell_tool".to_string(), false),
                 ]),
+                ..Default::default()
             },
             RequirementSource::EnterpriseManaged {
                 id: "enterprise-id".to_string(),
@@ -12840,8 +12885,11 @@ max_concurrent_threads_per_session = 17
     assert!(usage_hints.root.is_none() && usage_hints.subagent.is_none());
 }
 
-#[test]
-fn multi_agent_v2_model_override_exposure_preserves_configured_usage_hints() {
+#[test_case::test_case(false; "native_tools")]
+#[test_case::test_case(true; "native_tools_disabled")]
+fn multi_agent_v2_model_override_exposure_preserves_configured_usage_hints(
+    disable_native_tools: bool,
+) {
     let config_toml = toml::from_str(
         r###"[features.multi_agent_v2]
 enabled = true
@@ -12852,7 +12900,8 @@ expose_spawn_agent_model_overrides = true
     )
     .expect("multi-agent v2 config should parse");
 
-    let config = resolve_multi_agent_v2_config(&config_toml);
+    let mut config = resolve_multi_agent_v2_config(&config_toml);
+    config.disable_native_tools = disable_native_tools;
     assert!(config.expose_spawn_agent_model_overrides);
     assert_eq!(
         config.root_agent_usage_hint_text.as_deref(),
@@ -12878,6 +12927,23 @@ expose_spawn_agent_model_overrides = true
             Some("## `update_plan`\nSubagent guidance.".to_string()),
         )
     );
+}
+
+#[test]
+fn multi_agent_v2_disabled_native_tools_omit_default_roles() {
+    let mut config = resolve_multi_agent_v2_config(&ConfigToml::default());
+    config.disable_native_tools = true;
+    let mut messages = ResolvedModelMessages::bundled().multi_agent();
+    for catalog_override in [false, true] {
+        if catalog_override {
+            messages.root = ResolvedMessage::Catalog("Catalog root base.");
+            messages.subagent = ResolvedMessage::Catalog("Catalog subagent base.");
+        }
+        let usage_hints = resolve_usage_hints(
+            &config, messages, /*omit_update_plan_instructions*/ false,
+        );
+        assert_eq!((usage_hints.root, usage_hints.subagent), (None, None));
+    }
 }
 
 #[test]
@@ -14327,4 +14393,74 @@ async fn generated_image_history_loads_from_config_toml() -> std::io::Result<()>
             .any(|warning| warning.contains("generated_image_history_max_inline = 4"))
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn model_context_v1_config_defaults_and_validation() -> anyhow::Result<()> {
+    for (text, enabled, percent) in [
+        ("", false, None),
+        (
+            "model_context_settings_v1 = true\nmodel_auto_compact_percent = 75",
+            true,
+            Some(75),
+        ),
+    ] {
+        let home = TempDir::new()?;
+        std::fs::write(home.path().join(CONFIG_TOML_FILE), text)?;
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(home.path().to_path_buf())
+            .build()
+            .await?;
+        assert_eq!(config.model_context_settings_v1, enabled);
+        assert_eq!(config.model_auto_compact_percent, percent);
+        let manager = config.to_models_manager_config();
+        assert_eq!(manager.model_context_settings_v1, enabled);
+        assert_eq!(manager.model_auto_compact_percent, percent);
+    }
+    for text in [
+        "model_context_settings_v1 = true\nmodel_auto_compact_percent = 75\nmodel_auto_compact_token_limit = 100",
+        "model_auto_compact_percent = 0",
+        "model_auto_compact_percent = 101",
+    ] {
+        let home = TempDir::new()?;
+        std::fs::write(home.path().join(CONFIG_TOML_FILE), text)?;
+        assert!(
+            ConfigBuilder::without_managed_config_for_tests()
+                .codex_home(home.path().to_path_buf())
+                .build()
+                .await
+                .is_err(),
+            "{text}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_context_v1_guardian_budget_honors_a_resolved_unknown_model_window() {
+    use codex_models_manager::manager::ModelsManager;
+    let manager = codex_models_manager::manager::StaticModelsManager::new(
+        None,
+        codex_protocol::openai_models::ModelsResponse { models: vec![] },
+        codex_models_manager::ModelOrigin::ExplicitConfig,
+    );
+    let mut config = test_config().await;
+    config.model_context_settings_v1 = true;
+    config.model_context_window = Some(800_000);
+    let model = manager
+        .get_model_info("unknown", &config.to_models_manager_config())
+        .await;
+    assert_eq!(config.guardian_input_token_limit(&model), 760_000);
+    config.model_context_window = None;
+    let model = manager
+        .get_model_info("unknown", &config.to_models_manager_config())
+        .await;
+    assert_eq!(model.resolved_context_window(), None);
+    assert_eq!(model.auto_compact_token_limit(), Some(244_800));
+    assert_eq!(config.guardian_input_token_limit(&model), 258_400);
+    config.model_context_settings_v1 = false;
+    let model = manager
+        .get_model_info("unknown", &config.to_models_manager_config())
+        .await;
+    assert_eq!(config.guardian_input_token_limit(&model), 121_600);
 }

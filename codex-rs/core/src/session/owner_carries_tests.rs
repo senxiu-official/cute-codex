@@ -78,6 +78,7 @@ async fn fixture() -> (Arc<Session>, Arc<TurnContext>, std::path::PathBuf) {
         pending: Vec::new(),
         owner_carries: Default::default(),
         paused: false,
+        stopped: false,
         poisoned: false,
         retries: Default::default(),
         permits: Default::default(),

@@ -73,7 +73,19 @@ impl CodexThread {
         &self,
         envelope: Envelope,
     ) -> Result<std::result::Result<(Status, Option<String>), BusyReason>> {
-        self.session.submit_exclusive_external_input(envelope).await
+        self.session
+            .submit_exclusive_external_input(envelope, false)
+            .await
+    }
+
+    /// One exclusive ANSWER turn through only the gate closed by owner Stop.
+    pub async fn submit_external_input_stop_answer(
+        &self,
+        envelope: Envelope,
+    ) -> Result<std::result::Result<(Status, Option<String>), BusyReason>> {
+        self.session
+            .submit_exclusive_external_input(envelope, true)
+            .await
     }
 
     /// Reopens the interruption gate without a human turn. Returns whether it

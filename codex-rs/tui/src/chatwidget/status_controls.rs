@@ -401,7 +401,6 @@ impl ChatWidget {
             }),
         );
         preview_data.thread_id = self.thread_id;
-        preview_data.renderer = self.status_line_renderer();
         preview_data.pull_request_url = self.status_line_pull_request_url().map(str::to_owned);
 
         preview_data.notification_style = self.notification_control.style;
@@ -445,7 +444,7 @@ impl ChatWidget {
         self.token_info
             .as_ref()
             .and_then(|info| info.model_context_window)
-            .or(self.config.model_context_window)
+            .or(self.config.legacy_context_window_override())
     }
 
     pub(super) fn status_line_context_remaining_percent(&self) -> Option<i64> {

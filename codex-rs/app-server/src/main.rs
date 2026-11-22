@@ -121,7 +121,9 @@ fn main() -> anyhow::Result<()> {
             managed_daemon,
         } = AppServerArgs::parse();
         if model_variants_capability {
-            println!("{{\"modelVariants\":true}}");
+            println!(
+                "{{\"modelVariants\":true,\"modelContextSettingsV1\":true,\"modelContextSettingsV2\":true}}"
+            );
             return Ok(());
         }
         if thread_retention_capability {

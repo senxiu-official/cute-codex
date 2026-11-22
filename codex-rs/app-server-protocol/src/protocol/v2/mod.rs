@@ -23,6 +23,7 @@ mod item;
 mod mcp;
 mod memory;
 mod model;
+mod model_provider;
 mod model_provider_error;
 mod notification;
 mod permissions;
@@ -66,6 +67,7 @@ pub use item::*;
 pub use mcp::*;
 pub use memory::*;
 pub use model::*;
+pub use model_provider::*;
 pub use model_provider_error::*;
 pub use notification::*;
 pub use permissions::*;
@@ -90,6 +92,9 @@ pub use windows_sandbox::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod owner_input_batch_tests;
 
 pub use external_input::*;
 

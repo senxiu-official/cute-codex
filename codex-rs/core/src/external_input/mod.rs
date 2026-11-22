@@ -24,11 +24,13 @@ pub(crate) struct Pending {
 }
 
 /// A turn reserved by exclusive admission. It consumes its bound item and no
-/// other active pending input; passive input may still join it.
+/// other active pending input. A stop_answer turn excludes passive input too.
 #[derive(Clone)]
 pub(crate) struct ExclusiveTurn {
     pub id: String,
     pub state: std::sync::Arc<tokio::sync::Mutex<crate::state::TurnState>>,
+    /// Only this identity may pass the Stop gate, and only in this turn.
+    pub stop_answer: Option<codex_protocol::external_input_record::MessageKey>,
 }
 
 pub(crate) struct Runtime {
@@ -46,6 +48,9 @@ pub(crate) struct Runtime {
     /// Weak reservations cannot outlive refused, blocked or cancelled owner input.
     pub owner_carries: BTreeMap<String, std::sync::Weak<Vec<Envelope>>>,
     pub paused: bool,
+    /// Volatile provenance: only Stop in this process can allow stop_answer.
+    /// Ordinary pause and restored gates never acquire this permission.
+    pub stopped: bool,
     /// Set before fallible writes. Cancellation and uncertain completion leave
     /// it set, preventing subsequent sampling until strict process recovery.
     pub poisoned: bool,
@@ -86,10 +91,39 @@ impl Runtime {
         match &pending.exclusive_turn {
             Some(bound) => !is_current(bound),
             None => {
-                pending.envelope.message.delivery.is_active()
+                (pending.envelope.message.delivery.is_active()
+                    || self
+                        .exclusive_turn
+                        .as_ref()
+                        .is_some_and(|turn| turn.stop_answer.is_some()))
                     && self.exclusive_turn.as_ref().is_some_and(is_current)
             }
         }
+    }
+
+    /// Gate permission is scoped to the exact reserved turn and message, not a
+    /// retry permit or a temporary global reopening.
+    pub(crate) fn stop_answer_key(
+        &self,
+        current: Option<&std::sync::Arc<tokio::sync::Mutex<crate::state::TurnState>>>,
+    ) -> Option<&codex_protocol::external_input_record::MessageKey> {
+        self.exclusive_turn
+            .as_ref()
+            .filter(|turn| {
+                current.is_some_and(|current| std::sync::Arc::ptr_eq(&turn.state, current))
+            })
+            .and_then(|turn| turn.stop_answer.as_ref())
+    }
+
+    pub(crate) fn processing_allowed(
+        &self,
+        id: &str,
+        current: Option<&std::sync::Arc<tokio::sync::Mutex<crate::state::TurnState>>>,
+    ) -> bool {
+        if let Some(key) = self.stop_answer_key(current) {
+            return key.message_id == id && (!self.paused || self.stopped);
+        }
+        !self.paused || self.permits.contains(id)
     }
 
     /// Pending admissions plus unfinished committed obligations.

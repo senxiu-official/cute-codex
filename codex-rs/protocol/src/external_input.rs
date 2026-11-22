@@ -160,6 +160,22 @@ impl Envelope {
         }
         Ok(())
     }
+    /// The trusted launch owner may request one dedicated ANSWER turn after Stop.
+    /// This validates the envelope, not the caller's authority or gate state.
+    pub fn validate_stop_answer(&self) -> Result<(), Error> {
+        self.validate()?;
+        if self.message.source.kind != SourceKind::Service
+            || self.message.source.id != "cutex-asks"
+            || self.message.event_type != "ANSWER"
+            || !self.message.delivery.is_active()
+        {
+            return Err(Error::Invalid(
+                "stop_answer requires an active cutex-asks service ANSWER",
+            ));
+        }
+        Ok(())
+    }
+
     /// Matching data is not authentication; the next caller must own the trusted binding.
     pub fn validate_binding(
         &self,

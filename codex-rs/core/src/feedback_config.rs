@@ -48,9 +48,20 @@ pub(crate) fn usage_tags(
         "rollout_budget.sampling_token_weight": config.rollout_budget.as_ref().map(|budget| budget.sampling_token_weight),
         "rollout_budget.prefill_token_weight": config.rollout_budget.as_ref().map(|budget| budget.prefill_token_weight),
     });
-    let Value::Object(values) = values else {
+    let Value::Object(mut values) = values else {
         unreachable!("the usage tag allowlist is an object");
     };
+    if config.model_context_settings_v1 {
+        values.insert("model_context_settings_v1".into(), json!(true));
+        values.insert(
+            "model_auto_compact_percent".into(),
+            json!(config.model_auto_compact_percent),
+        );
+        values.insert(
+            "model_auto_compact_token_limit_effective".into(),
+            json!(model_info.auto_compact_token_limit()),
+        );
+    }
     let mut tags: BTreeMap<_, _> = values
         .into_iter()
         .map(|(key, value)| {

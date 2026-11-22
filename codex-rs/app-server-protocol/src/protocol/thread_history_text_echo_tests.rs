@@ -15,6 +15,7 @@ use pretty_assertions::assert_eq;
 fn persisted_full_text_terminals_replace_flattened_echoes_without_losing_parts() {
     let text = vec![
         TurnItem::AgentMessage(AgentMessageItem {
+            moderation: None,
             id: "message".into(),
             content: vec![AgentMessageContent::Text {
                 text: "中文🙂".into(),
@@ -45,6 +46,7 @@ fn persisted_full_text_terminals_replace_flattened_echoes_without_losing_parts()
         for item in &text {
             items.push(RolloutItem::EventMsg(EventMsg::ItemCompleted(
                 ItemCompletedEvent {
+                    content_token_count: None,
                     thread_id: ThreadId::default(),
                     turn_id: "turn".into(),
                     item: item.clone(),

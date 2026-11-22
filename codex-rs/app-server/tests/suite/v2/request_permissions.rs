@@ -79,6 +79,10 @@ async fn code_mode_uses_permissions_approved_in_the_same_cell(
 
     let command = if strict_auto_review {
         "echo same-cell-review"
+    } else if cwd.infer_path_convention() == Some(codex_utils_path_uri::PathConvention::Windows) {
+        // Windows PowerShell redirects text as UTF-16. Keep the fixture UTF-8
+        // across Store-shell fallback while exercising the same approved write.
+        "[IO.File]::WriteAllText('granted.txt', 'same-cell-grant')"
     } else {
         "echo same-cell-grant > granted.txt"
     };

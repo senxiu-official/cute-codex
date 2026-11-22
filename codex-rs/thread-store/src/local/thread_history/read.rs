@@ -114,6 +114,7 @@ pub(in crate::local) async fn list_turns(
     let lineage = store
         .resolve_rollout_lineage_for_history_page(params.thread_id)
         .await?;
+    lineage.ensure_presentation_index(store).await?;
     let pool = store.thread_history_db().await?;
     let page = page_turn_rows(
         pool,
@@ -175,6 +176,7 @@ pub(in crate::local) async fn list_items(
         if params.turn_id.is_none()
             || params.position.is_some()
             || params.after_updated_at_ordinal.is_some()
+            || params.before_updated_at_ordinal.is_some()
             || params.sort_key != crate::ItemSortKey::CreatedAtOrdinal
             || !(1..=100).contains(&ids.len())
         {
@@ -190,6 +192,7 @@ pub(in crate::local) async fn list_items(
     let lineage = store
         .resolve_rollout_lineage_for_history_page(params.thread_id)
         .await?;
+    lineage.ensure_presentation_index(store).await?;
     let pool = store.thread_history_db().await?;
     let page = page_item_rows(pool, &lineage, &params).await?;
 

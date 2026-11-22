@@ -229,7 +229,9 @@ impl InitializeRequestProcessor {
                 vec![Delivery::AfterTurn, Delivery::Passive, Delivery::Soon]
             }),
             external_input_control_version: self.external_input_version.map(|_| 1),
+            external_input_stop_answer: self.external_input_version.map(|_| 1),
             owner_input_carries: self.external_input_version.map(|_| 1),
+            owner_input_batch: self.external_input_version.map(|_| 1),
             tool_gate_version: self.external_input_version.map(|_| 1),
             user_agent,
             codex_home,

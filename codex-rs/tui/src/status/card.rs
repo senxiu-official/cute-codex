@@ -386,7 +386,7 @@ impl StatusHistoryCell {
         let default_usage = TokenUsage::default();
         let (context_usage, context_window) = match token_info {
             Some(info) => (&info.last_token_usage, info.model_context_window),
-            None => (&default_usage, config.model_context_window),
+            None => (&default_usage, config.legacy_context_window_override()),
         };
         let context_window = context_window.map(|window| StatusContextWindowData {
             percent_remaining: if config.model_provider_id == "cute-claude" {

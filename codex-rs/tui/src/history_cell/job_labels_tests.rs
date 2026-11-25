@@ -4,6 +4,7 @@ use serde_json::json;
 fn receipt(id: &str, action: &str) -> ThreadItemPayload {
     ThreadItemPayload::McpToolCall {
         mcp_app_ui: None,
+        environment_id: None,
         id: format!("call-{id}"),
         server: "cutex_job".into(),
         tool: "submit".into(),

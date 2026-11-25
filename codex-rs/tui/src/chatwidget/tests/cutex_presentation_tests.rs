@@ -9,6 +9,7 @@ async fn cutex_mcp_completed_item_keeps_full_transcript() {
     // Core's code_mode_can_print_structured_mcp_tool_result_fields proves the producer.
     let item = AppServerThreadItemPayload::McpToolCall {
         mcp_app_ui: None,
+        environment_id: None,
         id: "exec-nested-call".into(),
         server: "cutex_job".into(),
         tool: "query".into(),
@@ -73,6 +74,7 @@ async fn cutex_mcp_action_label_live_and_history_reconstruction() {
     ) -> AppServerThreadItemPayload {
         AppServerThreadItemPayload::McpToolCall {
             mcp_app_ui: None,
+            environment_id: None,
             id: tool.into(),
             server: "cutex_job".into(),
             tool: tool.into(),

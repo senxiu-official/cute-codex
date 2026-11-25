@@ -536,8 +536,8 @@ async fn only_explicit_owner_interrupt_submission_carries_stop_provenance_and_tr
         .unwrap();
     let ordinary = submissions.recv().await.unwrap();
     assert!(matches!(
-        ordinary.op,
-        codex_protocol::protocol::Op::Interrupt
+        ordinary.op.as_protocol(),
+        Some(codex_protocol::protocol::Op::Interrupt)
     ));
     assert!(!ordinary.owner_stop);
     let trace = codex_protocol::protocol::W3cTraceContext {
@@ -550,7 +550,10 @@ async fn only_explicit_owner_interrupt_submission_carries_stop_provenance_and_tr
         .unwrap();
     let owner = submissions.recv().await.unwrap();
     assert_eq!(owner.id, id);
-    assert!(matches!(owner.op, codex_protocol::protocol::Op::Interrupt));
+    assert!(matches!(
+        owner.op.as_protocol(),
+        Some(codex_protocol::protocol::Op::Interrupt)
+    ));
     assert!(owner.owner_stop);
     assert_eq!(owner.trace, Some(trace));
 }

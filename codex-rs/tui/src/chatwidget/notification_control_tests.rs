@@ -24,7 +24,6 @@ async fn notification_item_uses_confirmed_labels_in_preview() {
                 /*use_theme_colors*/ true,
             )
             .unwrap()
-            .into_hyperlink_line()
             .line;
         lines.push(
             line.spans
@@ -66,7 +65,6 @@ async fn notification_styles_are_exact_and_independent_of_label_text() {
                 /*use_theme_colors*/ true,
             )
             .unwrap()
-            .into_hyperlink_line()
             .line;
         let span = &line.spans[0];
         assert_eq!(span.style.add_modifier.contains(Modifier::BOLD), bold);

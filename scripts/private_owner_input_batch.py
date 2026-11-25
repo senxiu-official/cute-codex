@@ -219,7 +219,18 @@ try:
             config.write('\n[hooks.state.'+json.dumps(item['key'])+']\ntrusted_hash = '
                          +json.dumps(item['currentHash'])+'\n')
     p=launch([]);rpc=stdio(p);rpc.initialize()
-    thread_id=rpc.call('thread/start',{'cwd':str(root),'model':'gpt-5.1','approvalPolicy':'never'})['result']['thread']['id']
+    thread_id=rpc.call('thread/start',{'cwd':str(root),'model':'gpt-5.1','approvalPolicy':'never','ephemeral':False,'historyMode':'paginated'})['result']['thread']['id']
+    # Cutex uses this exact read as the empty persistent-agent creation ACK.
+    created=rpc.call('thread/read',{'threadId':thread_id,'includeTurns':True})['result']['thread']
+    assert created['id']==thread_id and created['historyMode']=='paginated' and created['turns']==[],created
+    assert Path(created['cwd']).resolve()==root and len(requests)==0,created
+    report['checks'].append('persistent-agent-start-read-empty-durable-ack-no-model')
+    stop(p);p=launch([]);rpc=stdio(p);rpc.initialize()
+    restored=rpc.call('thread/read',{'threadId':thread_id,'includeTurns':True})['result']['thread']
+    assert restored['id']==thread_id and restored['turns']==[] and len(requests)==0,restored
+    report['checks'].append('empty-agent-read-after-app-server-restart-no-model')
+    # A persisted read does not load an execution session for subsequent turns.
+    rpc.call('thread/resume',{'threadId':thread_id})
     reject(rpc,{'threadId':thread_id,'clientUserMessageId':'unsupported','input':text('unsupported'),'ownerInputs':[]})
     report['checks'].append('unbound-empty-prefix-refused-before-model')
     seed=turn(rpc,thread_id,'already-read',text('seed'))

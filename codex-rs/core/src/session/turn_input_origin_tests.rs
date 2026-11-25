@@ -148,7 +148,7 @@ async fn poisoned_external_input_log_does_not_prevent_interrupting_reserved_turn
     gate.poisoned = true;
     *session.external_input.lock().await = Some(gate);
     let session = Arc::new(session);
-    session.interrupt_task().await;
+    session.interrupt_task_with_external_gate().await;
     assert!(session.active_turn.lock().await.is_none());
     assert!(
         session

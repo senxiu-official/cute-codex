@@ -70,6 +70,7 @@ pub(crate) const RATE_LIMIT_STALE_THRESHOLD_MINUTES: i64 = 15;
 pub(crate) struct RateLimitWindowDisplay {
     /// Percent used for the window.
     pub used_percent: f64,
+    /// Unix time from the server, before formatting for the local clock.
     pub resets_at_unix: Option<i64>,
     /// Human-readable local reset time.
     pub resets_at: Option<String>,

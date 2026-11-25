@@ -63,6 +63,7 @@ impl JobLabels {
             server: server.clone(),
             tool: tool.clone(),
             arguments: Some(arguments.clone()),
+            environment_id: None,
         };
         let outcome = cutex_mcp_display::outcome(&invocation, body)?;
         let id = outcome.job_id?;

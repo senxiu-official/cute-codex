@@ -7,14 +7,14 @@ expression: value
 
   Type to search
 
-› [x] Use theme colors      Apply colors from the active /theme
+› Choose a status line provider
+  Create a custom status line
   ───────────────────────
-  [x] project-name          Project name (omitted when unavailable)
-  [x] git-branch            Current Git branch (omitted when unavailable)
-  [x] thread-title          Current thread title, or thread identifier when unnamed
-  [ ] C+ Notification       Cutex notification priority (Alt+N to cycle)
-  [ ] C+ Working Directory  Working directory with configurable display aliases
-  [ ] C+ Agent Name         Agent name and assigned project badge
+  [x] Use theme colors           Apply colors from the active /theme
+  ───────────────────────
+  [x] project-name               Project name (omitted when unavailable)
+  [x] git-branch                 Current Git branch (omitted when unavailable)
+  [x] thread-title               Current thread title, or thread identifier when unnamed
 ↓
   preview-live-root · feature/live-preview-branch · Live preview thread
-  space toggle · ←/→ reorder · enter save · esc cancel
+  enter select · esc back

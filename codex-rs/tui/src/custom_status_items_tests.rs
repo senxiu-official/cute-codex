@@ -152,7 +152,6 @@ fn status_items_process_renderer() {
                 /*use_theme_colors*/ true,
             )
             .unwrap()
-            .into_hyperlink_line()
             .line;
         assert_eq!(preview.spans[..3], line.spans[..3]);
         // Render through the same native ratatui width handling as the footer.

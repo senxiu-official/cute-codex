@@ -12,7 +12,6 @@ use chrono::DateTime;
 use codex_app_server_protocol::ThreadHistoryChangeSet;
 use codex_app_server_protocol::project_rollout_line;
 use codex_protocol::ThreadId;
-use codex_rollout::RolloutItem;
 use tracing::warn;
 
 use super::LocalThreadStore;
@@ -51,14 +50,46 @@ pub(super) async fn materialize_to_sqlite_with_reads(
     rollout_path: &Path,
     reads: &AncestorReads,
 ) -> ThreadStoreResult<()> {
+    materialize_projection(
+        store,
+        thread_id,
+        ProjectionRollout {
+            path: rollout_path.to_owned(),
+            reads: reads.clone(),
+        },
+        /*flushed_len*/ None,
+    )
+    .await
+}
+
+pub(super) async fn materialize_durable_suffix(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+    flushed_len: Option<u64>,
+) -> ThreadStoreResult<()> {
+    materialize_projection(
+        store,
+        thread_id,
+        ProjectionRollout {
+            path: rollout_path.to_owned(),
+            reads: AncestorReads::default(),
+        },
+        flushed_len,
+    )
+    .await
+}
+
+async fn materialize_projection(
+    store: &LocalThreadStore,
+    thread_id: ThreadId,
+    rollout: ProjectionRollout,
+    flushed_len: Option<u64>,
+) -> ThreadStoreResult<()> {
     if store.state_db.is_none() {
         return Ok(());
     }
-    let rollout = ProjectionRollout {
-        path: rollout_path.to_owned(),
-        reads: reads.clone(),
-    };
-    let result = materialize_to_sqlite_with_state_db(store, thread_id, rollout).await;
+    let result = materialize_to_sqlite_with_state_db(store, thread_id, rollout, flushed_len).await;
     record_projection_outcome(&result);
     result
 }
@@ -67,6 +98,7 @@ async fn materialize_to_sqlite_with_state_db(
     store: &LocalThreadStore,
     thread_id: ThreadId,
     rollout: ProjectionRollout,
+    flushed_len: Option<u64>,
 ) -> ThreadStoreResult<()> {
     let projection_state = super::thread_history::projection_state(store, thread_id).await?;
     let previous_offset = projection_state
@@ -79,6 +111,9 @@ async fn materialize_to_sqlite_with_state_db(
     let start_offset = projection_state
         .as_ref()
         .map_or(0, |state| state.next_byte_offset);
+    if start_offset > 0 && Some(start_offset) == flushed_len {
+        return Ok(());
+    }
     if rollout
         .reads
         .cutoff(&rollout.path)
@@ -426,12 +461,16 @@ fn read_projection_batches_with_migration(
             }
             changes
         };
+        let realtime_item = if is_inherited_subagent_history {
+            None
+        } else {
+            line.item.realtime_item().map(std::borrow::Cow::into_owned)
+        };
         let fallback_created_at_ms = if changes
             .changed_items
             .iter()
             .any(|change| change.item.started_at_ms.is_none())
-            || (!is_inherited_subagent_history
-                && matches!(&line.item, RolloutItem::RealtimeItem(_)))
+            || realtime_item.is_some()
         {
             match DateTime::parse_from_rfc3339(line.timestamp.as_str()) {
                 Ok(timestamp) => Some(timestamp.timestamp_millis()),
@@ -498,15 +537,12 @@ fn read_projection_batches_with_migration(
                 fallback_created_at_ms,
                 changes,
                 presentation: match &line.item {
-                    RolloutItem::EventMsg(
+                    codex_rollout::RolloutItem::EventMsg(
                         codex_protocol::protocol::EventMsg::PresentationAppended(record),
                     ) => Some(record.clone()),
                     _ => None,
                 },
-                realtime_item: match line.item {
-                    RolloutItem::RealtimeItem(item) if !is_inherited_subagent_history => Some(item),
-                    _ => None,
-                },
+                realtime_item,
             },
         )));
         next_ordinal = next_line_ordinal;

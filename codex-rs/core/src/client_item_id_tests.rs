@@ -77,7 +77,7 @@ fn provider_item_id_projection_preserves_recovered_external_identity() -> anyhow
             ..Default::default()
         };
         let mut request = client.build_responses_request(
-            &prompt,
+            &Arc::new(prompt.clone()),
             &test_model_info(),
             /*effort*/ None,
             codex_protocol::config_types::ReasoningSummary::None,
@@ -221,7 +221,7 @@ async fn provider_item_id_projection_reaches_serialized_http_input() -> anyhow::
     session.set_external_input_attempt(true);
     let mut stream = session
         .stream(
-            &prompt,
+            &Arc::new(prompt.clone()),
             &test_model_info(),
             &test_session_telemetry(),
             /*effort*/ None,

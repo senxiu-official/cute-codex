@@ -1,3 +1,4 @@
+// Exercise command/exec with a controlled shell, without host login-profile output.
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
@@ -20,6 +21,7 @@ use codex_core::exec_env::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
+use codex_utils_path_uri::LegacyAppPathString;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
@@ -52,7 +54,7 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
     let process_id = "sleep-1".to_string();
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "sleep 30".to_string()],
             process_id: Some(process_id.clone()),
             tty: false,
             stream_stdin: false,
@@ -103,7 +105,7 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf 'legacy-out'; printf 'legacy-err' >&2".to_string(),
             ],
             process_id: None,
@@ -152,7 +154,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "/bin/sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf '%s|%s|%s|%s|%s|%s' \"$COMMAND_EXEC_BASELINE\" \"$COMMAND_EXEC_EXTRA\" \"${RUST_LOG-unset}\" \"$CODEX_HOME\" \"$OPENAI_FEDERATION_RULE_ID\" \"$openai_identity_token_file\"".to_string(),
             ],
             process_id: None,
@@ -267,7 +269,7 @@ async fn command_exec_accepts_permission_profile() -> Result<()> {
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf 'profile'".to_string(),
             ],
             process_id: None,
@@ -380,7 +382,7 @@ async fn command_exec_enforces_managed_deny_read_requirements() -> Result<()> {
     for sandbox_policy in [
         SandboxPolicy::DangerFullAccess,
         SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![nested_root.try_into()?],
+            writable_roots: vec![LegacyAppPathString::from_path(&nested_root)],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -431,7 +433,7 @@ async fn command_exec_permission_profile_starts_selected_network_proxy() -> Resu
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf '%s' \"${CODEX_NETWORK_PROXY_ACTIVE-unset}\"".to_string(),
             ],
             process_id: None,
@@ -479,7 +481,7 @@ async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() 
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf '%s' \"${CODEX_NETWORK_PROXY_ACTIVE-unset}\"".to_string(),
             ],
             process_id: None,
@@ -512,63 +514,147 @@ async fn command_exec_permission_profile_does_not_reuse_default_network_proxy() 
 }
 
 #[cfg(unix)]
+#[test_case::test_case(false; "local core")]
+#[test_case::test_case(true; "exec server")]
 #[tokio::test]
-async fn command_exec_permission_profile_project_roots_use_command_cwd() -> Result<()> {
+async fn command_exec_permission_profile_project_roots_use_command_cwd(
+    exec_server: bool,
+) -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     let command_dir = codex_home.path().join("command-cwd");
-    std::fs::create_dir(&command_dir)?;
+    let granted = command_dir.join("granted/child.txt");
+    let sibling = command_dir.join("sibling.txt");
+    let parent = codex_home.path().join("granted/parent.txt");
+    std::fs::create_dir_all(command_dir.join("granted"))?;
+    std::fs::create_dir(codex_home.path().join("granted"))?;
+    std::fs::write(&sibling, b"original")?;
+    std::fs::write(&parent, b"original")?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     insert_command_exec_config(
         codex_home.path(),
         r#"
 [permissions.command-cwd.filesystem]
 ":root" = "read"
-":workspace_roots" = "write"
+[permissions.command-cwd.filesystem.":workspace_roots"]
+"granted" = "write"
 "#,
     )?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
-        .await?;
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf child > granted/child.txt &&
+         ! (printf sibling > sibling.txt) 2>/dev/null &&
+         ! (printf parent > ../granted/parent.txt) 2>/dev/null"
+            .to_string(),
+    ];
+    let (exit_code, output) = if exec_server {
+        use app_test_support::LocalWebsocketExecServer;
+        use codex_core::config::ConfigBuilder;
+        use codex_core::config::ConfigOverrides;
+        use codex_core::config::LoaderOverrides;
+        use codex_core::exec_env::create_env;
+        use codex_exec_server::Environment;
+        use codex_exec_server::ExecParams;
+        use codex_exec_server::ExecProcessEvent;
+        use codex_exec_server::FileSystemSandboxContext;
+        use codex_utils_path_uri::PathUri;
 
-    let command_request_id = mcp
-        .send_command_exec_request(CommandExecParams {
-            command: vec![
-                "sh".to_string(),
-                "-lc".to_string(),
-                "printf child > child.txt && ! printf parent > ../parent.txt".to_string(),
-            ],
-            process_id: None,
-            tty: false,
-            stream_stdin: false,
-            stream_stdout_stderr: false,
-            output_bytes_cap: None,
-            disable_output_cap: false,
-            disable_timeout: false,
-            timeout_ms: None,
-            cwd: Some("command-cwd".into()),
-            env: None,
-            size: None,
-            sandbox_policy: None,
-            permission_profile: Some("command-cwd".to_string()),
-        })
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(command_dir.clone()),
+                default_permissions: Some("command-cwd".to_string()),
+                ..Default::default()
+            })
+            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+            .build()
+            .await?;
+        let server = LocalWebsocketExecServer::start(
+            codex_home.path(),
+            &codex_utils_cargo_bin::cargo_bin("exec-server")?,
+        )
         .await?;
-
-    let response: CommandExecResponse = mcp.read_response(command_request_id).await?;
-    assert_eq!(
-        response.exit_code, 0,
-        "parent cwd write should fail under command project-root profile: {response:?}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(command_dir.join("child.txt"))?,
-        "child"
-    );
-    assert!(
-        !codex_home.path().join("parent.txt").exists(),
-        "permissionProfile :workspace_roots write should not grant the server cwd when command cwd differs"
-    );
+        let environment = Environment::create_for_tests(Some(server.websocket_url().to_owned()))?;
+        let cwd = PathUri::from_host_native_path(&command_dir)?;
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            config.permissions.permission_profile().clone(),
+            cwd.clone(),
+        );
+        let started = environment
+            .get_exec_backend()
+            .start(ExecParams {
+                process_id: "restricted-write".into(),
+                metadata: None,
+                argv: command,
+                cwd,
+                env_policy: None,
+                shell_snapshot: None,
+                env: create_env(
+                    &config.permissions.shell_environment_policy,
+                    /*thread_id*/ None,
+                ),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: Some(sandbox),
+                enforce_managed_network: false,
+                managed_network: None,
+                network_proxy: None,
+            })
+            .await?;
+        let mut events = started.process.subscribe_events();
+        let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+        let mut status = None;
+        let mut output = String::new();
+        loop {
+            match tokio::time::timeout_at(deadline, events.recv()).await?? {
+                ExecProcessEvent::Output(chunk) => {
+                    output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+                }
+                ExecProcessEvent::Exited { exit_code, .. } => status = Some(exit_code),
+                ExecProcessEvent::Closed { .. } => {
+                    break (
+                        status.context("exec-server closed without an exit code")?,
+                        output,
+                    );
+                }
+                ExecProcessEvent::Failed(message) => {
+                    anyhow::bail!("exec-server failed: {message}\n{output}");
+                }
+            }
+        }
+    } else {
+        let mut mcp = TestAppServer::builder()
+            .with_codex_home(codex_home.path())
+            .without_auto_env()
+            .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+            .await?;
+        let command_request_id = mcp
+            .send_command_exec_request(CommandExecParams {
+                command,
+                process_id: None,
+                tty: false,
+                stream_stdin: false,
+                stream_stdout_stderr: false,
+                output_bytes_cap: None,
+                disable_output_cap: false,
+                disable_timeout: false,
+                timeout_ms: None,
+                cwd: Some("command-cwd".into()),
+                env: None,
+                size: None,
+                sandbox_policy: None,
+                permission_profile: Some("command-cwd".to_string()),
+            })
+            .await?;
+        let response: CommandExecResponse = mcp.read_response(command_request_id).await?;
+        (response.exit_code, response.stderr)
+    };
+    assert_eq!(exit_code, 0, "{output}");
+    assert_eq!(std::fs::read(granted)?, b"child");
+    assert_eq!(std::fs::read(sibling)?, b"original");
+    assert_eq!(std::fs::read(parent)?, b"original");
 
     Ok(())
 }
@@ -587,7 +673,7 @@ async fn command_exec_returns_error_when_local_environment_is_disabled() -> Resu
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "true".to_string()],
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -625,7 +711,7 @@ async fn command_exec_rejects_sandbox_policy_with_permission_profile() -> Result
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "true".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "true".to_string()],
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -666,7 +752,7 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 1".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "sleep 1".to_string()],
             process_id: Some("invalid-timeout-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -707,7 +793,7 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 1".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "sleep 1".to_string()],
             process_id: Some("invalid-cap-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -748,7 +834,7 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 1".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "sleep 1".to_string()],
             process_id: Some("negative-timeout-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -789,7 +875,7 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
 
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
-            command: vec!["sh".to_string(), "-lc".to_string(), "cat".to_string()],
+            command: vec!["sh".to_string(), "-c".to_string(), "cat".to_string()],
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -832,7 +918,7 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf 'abcdef'; printf 'uvwxyz' >&2".to_string(),
             ],
             process_id: Some("cap-1".to_string()),
@@ -880,7 +966,7 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf 'abcdefghij'; sleep 30".to_string(),
             ],
             process_id: Some(process_id.clone()),
@@ -944,7 +1030,7 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "printf 'out-start\\n'; printf 'err-start\\n' >&2; IFS= read line; printf 'out:%s\\n' \"$line\"; printf 'err:%s\\n' \"$line\" >&2".to_string(),
             ],
             process_id: Some(process_id.clone()),
@@ -1020,7 +1106,7 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "stty -echo; if [ -t 0 ]; then printf 'tty\\n'; else printf 'notty\\n'; fi; IFS= read line; printf 'echo:%s\\n' \"$line\"".to_string(),
             ],
             process_id: Some(process_id.clone()),
@@ -1091,7 +1177,7 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
         .send_command_exec_request(CommandExecParams {
             command: vec![
                 "sh".to_string(),
-                "-lc".to_string(),
+                "-c".to_string(),
                 "stty -echo; printf 'start:%s\\n' \"$(stty size)\"; IFS= read _line; printf 'after:%s\\n' \"$(stty size)\"".to_string(),
             ],
             process_id: Some(process_id.clone()),
@@ -1245,6 +1331,83 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
         .kill()
         .await
         .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+// Regression for a disconnected connection leaving sandbox descendants alive.
+// Each marker must disappear within the existing five-second deadline, while
+// another connection must remain usable.
+#[tokio::test]
+async fn command_exec_disconnect_terminates_all_owned_processes_within_five_seconds() -> Result<()>
+{
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let mut ws = connect_websocket(bind_addr).await?;
+    let mut survivor = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws, 1, "disconnect_owner").await?;
+    read_initialize_response(&mut ws, 1).await?;
+    send_initialize_request(&mut survivor, 2, "surviving_connection").await?;
+    read_initialize_response(&mut survivor, 2).await?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let mut markers = Vec::new();
+    for id in [101, 102] {
+        let process_id = format!("owned-{id}");
+        let marker = format!("codex-command-exec-marker-{nonce}-{id}");
+        send_request(
+            &mut ws,
+            "command/exec",
+            id,
+            Some(serde_json::json!({
+                "command": ["python3", "-c",
+                    "import time; print('ready', flush=True); time.sleep(30)", marker],
+                "processId": process_id,
+                "streamStdoutStderr": true,
+            })),
+        )
+        .await?;
+        collect_command_exec_output_until(
+            CommandExecDeltaReader::Websocket(&mut ws),
+            &process_id,
+            "owned command ready",
+            |output, _| output.stdout.contains("ready\n"),
+        )
+        .await?;
+        markers.push(marker);
+    }
+    ws.close(None).await?;
+    timeout(Duration::from_secs(5), async {
+        for marker in &markers {
+            wait_for_process_marker(marker, false).await?;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .context("connection-owned commands did not exit within five seconds")??;
+    send_request(
+        &mut survivor,
+        "command/exec",
+        103,
+        Some(serde_json::json!({"command": ["sh", "-c", "printf alive"]})),
+    )
+    .await?;
+    loop {
+        if let JSONRPCMessage::Response(response) = read_jsonrpc_message(&mut survivor).await?
+            && response.id == RequestId::Integer(103)
+        {
+            let result: CommandExecResponse = serde_json::from_value(response.result)?;
+            assert_eq!(result.exit_code, 0);
+            assert_eq!(result.stdout, "alive");
+            break;
+        }
+    }
+    process
+        .kill()
+        .await
+        .context("stop regression websocket server")?;
     Ok(())
 }
 

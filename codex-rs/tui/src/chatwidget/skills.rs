@@ -13,12 +13,11 @@ use crate::mention_codec::is_mention_name_char;
 use crate::mention_codec::parse_linked_tool_mention;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use codex_app_server_protocol::SkillErrorInfo;
 use codex_app_server_protocol::SkillMetadata;
-use codex_app_server_protocol::SkillsListEntry;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_connectors::AppInfo;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
@@ -143,13 +142,29 @@ impl ChatWidget {
         self.add_info_message(summary, /*hint*/ None);
     }
 
-    pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
-        // A response for a previous directory is not an empty current catalog.
-        let Some(skills) = skills_for_cwd(&self.config.cwd, &response.data) else {
-            return;
+    /// Updates skills for the displayed session and returns its load errors.
+    pub(crate) fn set_skills_from_response(
+        &mut self,
+        response: SkillsListResponse,
+    ) -> Vec<SkillErrorInfo> {
+        let Some((skills, errors)) = response
+            .data
+            .into_iter()
+            .find(|entry| {
+                crate::app_server_session::decode_thread_cwd(
+                    &LegacyAppPathString::from_path(&entry.cwd),
+                    self.app_server_path_convention,
+                )
+                .is_ok_and(|cwd| cwd == self.current_cwd)
+            })
+            .map(|entry| (entry.skills, entry.errors))
+        else {
+            // A late response for another session must not clear the current catalog.
+            return Vec::new();
         };
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+        errors
     }
 
     pub(crate) fn annotate_skill_reads_in_parsed_cmd(
@@ -181,16 +196,6 @@ impl ChatWidget {
 
         parsed_cmd
     }
-}
-
-fn skills_for_cwd(
-    cwd: &AbsolutePathBuf,
-    skills_entries: &[SkillsListEntry],
-) -> Option<Vec<SkillMetadata>> {
-    skills_entries
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd.as_path())
-        .map(|entry| entry.skills.clone())
 }
 
 fn enabled_skills_for_mentions(skills: &[SkillMetadata]) -> Vec<SkillMetadata> {

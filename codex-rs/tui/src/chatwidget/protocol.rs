@@ -1,6 +1,21 @@
 use super::*;
 
 impl ChatWidget {
+    fn on_keyed_agent_message_delta(&mut self, key: (String, String), delta: String) {
+        if self.transcript.replayed_cloud_text.is_some()
+            && self.stream_controller.is_some()
+            && self
+                .transcript
+                .active_streamed_agent_message
+                .as_ref()
+                .is_some_and(|active| active != &key)
+        {
+            self.flush_answer_stream_with_separator();
+        }
+        self.transcript.active_streamed_agent_message = Some(key);
+        self.on_agent_message_delta(delta);
+    }
+
     pub(crate) fn handle_server_notification(
         &mut self,
         notification: ServerNotification,
@@ -153,9 +168,10 @@ impl ChatWidget {
                             &notification.item_id,
                         ))
                 {
-                    self.transcript.active_streamed_agent_message =
-                        Some((notification.turn_id, notification.item_id));
-                    self.on_agent_message_delta(notification.delta);
+                    self.on_keyed_agent_message_delta(
+                        (notification.turn_id, notification.item_id),
+                        notification.delta,
+                    );
                 }
             }
             ServerNotification::PlanDelta(notification) => {
@@ -428,6 +444,7 @@ impl ChatWidget {
             | ServerNotification::ExternalAgentConfigImportProgress(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
+            | ServerNotification::ThreadSearchPartial(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
             | ServerNotification::ThreadRealtimeItemAdded(_)
@@ -512,6 +529,7 @@ impl ChatWidget {
                     question_drafts = self.take_question_drafts();
                 }
                 self.last_non_retry_error = None;
+                self.flush_generated_images(&notification.turn.id);
                 let completion = self.completion_cell(&notification.turn, replay_kind);
                 self.on_task_complete(
                     last_agent_message.map(|(_, text)| text.to_owned()),
@@ -524,6 +542,7 @@ impl ChatWidget {
                     question_drafts = self.take_question_drafts();
                 }
                 self.last_non_retry_error = None;
+                self.flush_generated_images(&notification.turn.id);
                 let reason = if self
                     .turn_lifecycle
                     .take_budget_limited(notification.turn.id.as_str())
@@ -538,6 +557,7 @@ impl ChatWidget {
                 if replay_kind.is_none() {
                     question_drafts = self.take_question_drafts();
                 }
+                self.flush_generated_images(&notification.turn.id);
                 let error = notification
                     .turn
                     .error
@@ -630,8 +650,7 @@ impl ChatWidget {
                 if self.transcript.active_streamed_agent_message.as_ref() != Some(&key)
                     && self.transcript.last_flushed_agent_message.as_ref() != Some(&key)
                 {
-                    self.transcript.active_streamed_agent_message = Some(key);
-                    self.on_agent_message_delta(text);
+                    self.on_keyed_agent_message_delta(key, text);
                 }
             }
             ThreadItemPayload::Reasoning {
@@ -752,6 +771,8 @@ impl ChatWidget {
         {
             return;
         }
+        let was_finished =
+            std::mem::replace(&mut self.transcript.recording_finished_cloud_text, true);
         match notification.item.payload {
             item @ ThreadItemPayload::CommandExecution { .. } => {
                 self.on_command_execution_completed(item)
@@ -762,6 +783,7 @@ impl ChatWidget {
                 replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
             ),
         }
+        self.transcript.recording_finished_cloud_text = was_finished;
     }
 }
 

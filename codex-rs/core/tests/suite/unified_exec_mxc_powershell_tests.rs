@@ -17,6 +17,32 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[test]
+fn mxc_powershell_cwd_restore_does_not_probe_unc_roots() -> Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let shell = PathBuf::from(std::env::var_os("SystemRoot").context("Windows system root")?)
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let output = std::process::Command::new(shell)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(root.join("tests/fixtures/mxc_pwsh_cwd.ps1"))
+        .arg("-AssetPath")
+        .arg(root.join("assets/tools/mxc_pwsh_cwd.ps1"))
+        .output()?;
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    Ok(())
+}
+
 #[test_case::test_case(false; "store_fallback")]
 #[test_case::test_case(true; "unreadable_ancestor")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

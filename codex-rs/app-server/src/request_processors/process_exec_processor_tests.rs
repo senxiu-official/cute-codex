@@ -189,6 +189,7 @@ async fn windows_terminal_reports_exit_before_closing_the_console() {
     let (_control_tx, control_rx) = mpsc::channel(1);
     let (tx, mut notifications) = mpsc::channel(1);
     let process = tokio::spawn(run_process(RunProcessParams {
+        disconnect: CancellationToken::new(),
         outgoing: Arc::new(OutgoingMessageSender::new(
             tx,
             AnalyticsEventsClient::disabled(),
@@ -231,4 +232,55 @@ async fn windows_terminal_reports_exit_before_closing_the_console() {
     .expect("the attached child should still be alive when the client receives process/exited");
     written.send(()).unwrap();
     process.await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn process_admitted_after_cleanup_is_cancelled_without_second_cleanup() {
+    let manager = ProcessExecManager::default();
+    let connection_id = ConnectionId(92);
+    manager.connection_closed(connection_id).await;
+    let disconnect = CancellationToken::new();
+    let (tx, mut rx) = mpsc::channel(8);
+    let params = StartProcessParams {
+        disconnect: disconnect.clone(),
+        outgoing: Arc::new(OutgoingMessageSender::new(
+            tx,
+            AnalyticsEventsClient::disabled(),
+        )),
+        request_id: ConnectionRequestId {
+            connection_id,
+            request_id: codex_app_server_protocol::RequestId::Integer(92),
+        },
+        process_handle: "late-process".into(),
+        command: vec!["sh".into(), "-c".into(), "sleep 30".into()],
+        cwd: AbsolutePathBuf::try_from(std::env::current_dir().unwrap()).unwrap(),
+        env: std::env::vars().collect(),
+        expiration: ExecExpiration::Cancellation(CancellationToken::new()),
+        tty: false,
+        stream_stdin: false,
+        stream_stdout_stderr: false,
+        output_bytes_cap: Some(DEFAULT_OUTPUT_BYTES_CAP),
+        size: None,
+    };
+    let registration = manager.sessions.lock().await;
+    let start = manager.start(params);
+    tokio::pin!(start);
+    assert!(futures::poll!(start.as_mut()).is_pending());
+    disconnect.cancel();
+    drop(registration);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        start.await.expect("already admitted start");
+        // The first envelope acknowledges spawn; completion must follow without drain cleanup.
+        rx.recv().await.expect("spawn response");
+        rx.recv().await.expect("exit notification");
+        loop {
+            if manager.sessions.lock().await.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("late process must terminate before the five-second RPC drain");
 }

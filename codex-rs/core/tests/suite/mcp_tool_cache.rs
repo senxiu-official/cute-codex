@@ -20,6 +20,7 @@ use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpServerKey;
 use codex_protocol::mcp::McpServerConnectionStatus;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -224,6 +225,7 @@ async fn mcp_calls_stay_bound_to_each_thread() -> anyhow::Result<()> {
             end.invocation,
             McpInvocation {
                 server: SERVER_NAME.to_string(),
+                environment_id: None,
                 tool: "echo".to_string(),
                 arguments: Some(json!({ "message": call_id })),
             }
@@ -606,15 +608,48 @@ async fn cached_http_mcp_starts_lazily_for_subagents(
     Ok(())
 }
 
+// Exercise the upstream default with the same first-use and cancellation controls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn c5_optional_stdio_first_call_with_shipping_defaults() -> anyhow::Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(90),
+        cached_stdio_first_use_scenario_with_policy(false),
+    )
+    .await
+    .context("C5 default optional MCP first-use scenario timed out")??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn c5_optional_stdio_first_call_with_lazy_enabled() -> anyhow::Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(90),
+        cached_stdio_first_use_scenario_with_policy(true),
+    )
+    .await
+    .context("C5 forced-lazy optional MCP first-use scenario timed out")??;
+    Ok(())
+}
+
 pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Value>> {
+    cached_stdio_first_use_scenario_with_policy(true).await
+}
+
+// The same cold-cache, eager, required, first-use, catalog-refresh and interrupted
+// startup checks exercise the shipping default and explicit feature enablement.
+async fn cached_stdio_first_use_scenario_with_policy(
+    force_lazy: bool,
+) -> anyhow::Result<Vec<Value>> {
     let responses_server = responses::start_mock_server().await;
     let command = remote_aware_stdio_server_bin()?;
     let environment_id = remote_aware_environment_id();
     let fixture = test_codex()
-        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .with_config(move |config| {
-            super::scenarios::configure_scenario_catalog(config);
+            core_test_support::test_codex::configure_scenario_catalog(config);
             config.update_plan_enabled = true;
+            if force_lazy {
+                config.features.enable(Feature::McpLazyStdioStartup).expect("lazy MCP feature");
+            }
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
             config
                 .permissions
@@ -646,6 +681,8 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
                 .set(servers)
                 .expect("test MCP server configuration");
         })
+        // Apply this after the scenario catalog reset so tools stay inline.
+        .with_model_info_override("gpt-5.4", |model| model.supports_search_tool = false)
         .build_with_auto_env(&responses_server)
         .await?;
     let fs = fixture.fs();
@@ -686,19 +723,21 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
         &format!("Echo from {first_process}."),
     );
 
+    let mut eager_config = fixture.config.clone();
+    eager_config
+        .features
+        .disable(Feature::McpLazyStdioStartup)?;
     let control = fixture
         .thread_manager
-        .start_thread(StartThreadOptions::new(fixture.config.clone()))
+        .start_thread(StartThreadOptions::new(eager_config))
         .await?
         .thread;
     wait_for_mcp_server(&control, SERVER_NAME).await?;
     let control_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&first_pid)).await?;
     control.shutdown_and_wait().await?;
 
-    let mut treatment = fixture.config.clone();
-    treatment.features.enable(Feature::McpLazyStdioStartup)?;
-    // The flag must preserve a required live connection even when the catalog is warm.
-    let mut required_config = treatment.clone();
+    // A required server still needs a live connection even when the catalog is warm.
+    let mut required_config = fixture.config.clone();
     let mut servers = required_config.mcp_servers.get().clone();
     servers
         .get_mut(SERVER_NAME)
@@ -739,7 +778,7 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
         ..
     } = fixture
         .thread_manager
-        .start_thread(StartThreadOptions::new(treatment))
+        .start_thread(StartThreadOptions::new(fixture.config.clone()))
         .await?;
     second_thread.submit(Op::Interrupt).await?;
 
@@ -788,7 +827,7 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
         second_thread
             .mcp_connection_statuses(&mcp_config)
             .await
-            .get(SERVER_NAME),
+            .get(&McpServerKey::unscoped(SERVER_NAME)),
         Some(&McpServerConnectionStatus::NotStarted),
     );
     assert_eq!(
@@ -965,11 +1004,17 @@ pub(super) async fn cached_stdio_first_use_scenario() -> anyhow::Result<Vec<Valu
         filtered_thread
             .mcp_connection_statuses(&mcp_config)
             .await
-            .get(SERVER_NAME),
+            .get(&McpServerKey::unscoped(SERVER_NAME)),
         Some(&McpServerConnectionStatus::NotStarted),
     );
     let result = filtered_thread
-        .call_mcp_tool(SERVER_NAME, "cwd", Some(json!({})), /*meta*/ None)
+        .call_mcp_tool(
+            SERVER_NAME,
+            /*environment_id*/ None,
+            "cwd",
+            Some(json!({})),
+            /*meta*/ None,
+        )
         .await?;
     assert_ne!(result.is_error, Some(true));
     let filtered_pid = wait_for_new_pid(fs.as_ref(), &pid_file, Some(&second_pid)).await?;
@@ -1169,7 +1214,7 @@ async fn cached_stdio_negotiates_sharing_on_first_use() -> anyhow::Result<()> {
             thread
                 .mcp_connection_statuses(&config)
                 .await
-                .get(SERVER_NAME),
+                .get(&McpServerKey::unscoped(SERVER_NAME)),
             Some(&McpServerConnectionStatus::NotStarted)
         );
     }
@@ -1179,6 +1224,7 @@ async fn cached_stdio_negotiates_sharing_on_first_use() -> anyhow::Result<()> {
         let result = thread
             .call_mcp_tool(
                 SERVER_NAME,
+                /*environment_id*/ None,
                 "echo",
                 Some(json!({"message":"identify process"})),
                 /*meta*/ None,
@@ -1206,7 +1252,7 @@ async fn cached_stdio_negotiates_sharing_on_first_use() -> anyhow::Result<()> {
         legacy_sibling
             .mcp_connection_statuses(&config)
             .await
-            .get(SERVER_NAME),
+            .get(&McpServerKey::unscoped(SERVER_NAME)),
         Some(&McpServerConnectionStatus::NotStarted)
     );
     let legacy = &processes[0];

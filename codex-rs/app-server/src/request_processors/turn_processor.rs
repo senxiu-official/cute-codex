@@ -13,10 +13,12 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageReference as CoreImageReference;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::TurnEnvironmentRequests;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::turn_input::AnnotatedResponseItem;
+use codex_protocol::turn_input::InjectedResponseItem;
 use codex_protocol::turn_input::ResponseItemAnnotations;
 use codex_utils_path_uri::PathUri;
 
@@ -335,6 +337,7 @@ impl TurnRequestProcessor {
             Op::TurnSettings {
                 turn_id: params.turn_id,
                 update: TurnSettingsUpdate {
+                    request_country: None,
                     approvals_reviewer: params
                         .approvals_reviewer
                         .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
@@ -397,11 +400,19 @@ impl TurnRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let (thread_uuid, thread) = self.load_thread(thread_id).await?;
         let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-        thread_state
-            .lock()
-            .await
-            .pending_interrupts
-            .push(request_id.clone());
+        {
+            let mut state = thread_state.lock().await;
+            if state.listener_shutdown
+                || (state.shutdown_drain.is_some() && !state.listener_matches(&thread))
+            {
+                return Err(invalid_request(
+                    "thread runtime is no longer accepting interrupts",
+                ));
+            }
+            state
+                .pending_interrupts
+                .push((turn_id.clone(), request_id.clone()));
+        }
         self.outgoing
             .record_request_turn_id(request_id, &turn_id)
             .await;
@@ -412,7 +423,7 @@ impl TurnRequestProcessor {
             .lock()
             .await
             .pending_interrupts
-            .retain(|pending_request_id| pending_request_id != request_id);
+            .retain(|(_, pending_request_id)| pending_request_id != request_id);
         let error = invalid_request(format!("turn {turn_id} is not active"));
         self.track_error_response(request_id, &error, /*error_type*/ None);
         Err(error)
@@ -1017,7 +1028,10 @@ impl TurnRequestProcessor {
             approval_policy.map(codex_app_server_protocol::AskForApproval::to_core);
         let approvals_reviewer =
             approvals_reviewer.map(codex_app_server_protocol::ApprovalsReviewer::to_core);
-        let sandbox_policy = sandbox_policy.map(|policy| policy.to_core());
+        let sandbox_policy = sandbox_policy
+            .map(|policy| policy.try_to_core())
+            .transpose()
+            .map_err(|err| invalid_request(format!("invalid sandboxPolicy: {err}")))?;
         let (permission_profile, active_permission_profile, profile_workspace_roots) =
             if let Some(permissions) = permissions {
                 let Some(snapshot) = snapshot.as_ref() else {
@@ -1058,6 +1072,7 @@ impl TurnRequestProcessor {
         if has_any_overrides {
             thread
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+                    request_country: None,
                     turn_extension_init: None,
                     disabled_plugin_ids: disabled_plugin_ids.clone(),
                     environments: environment_requests.clone(),
@@ -1084,6 +1099,7 @@ impl TurnRequestProcessor {
         }
 
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
+            request_country: None,
             disabled_plugin_ids,
             environments: environment_requests,
             runtime_workspace_roots,
@@ -1181,15 +1197,17 @@ impl TurnRequestProcessor {
             .into_iter()
             .enumerate()
             .map(|(index, value)| {
-                serde_json::from_value::<ResponseItem>(value)
+                serde_json::from_value::<InjectedResponseItem>(value)
                     .map_err(|err| format!("items[{index}] is not a valid response item: {err}"))
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(invalid_request)?;
-        validate_response_item_image_urls(&items)?;
+        for item in &items {
+            validate_response_item_image_urls(std::slice::from_ref(&item.item))?;
+        }
 
         thread
-            .inject_response_items(items)
+            .inject_response_items_with_retention(items)
             .await
             .map_err(|err| match err.details() {
                 CodexErrorDetails::InvalidRequest(message) => invalid_request(message.clone()),
@@ -1428,6 +1446,23 @@ impl TurnRequestProcessor {
         else {
             return Ok(None);
         };
+        let voice = match params.voice {
+            Some(voice) => Some(Some(voice)),
+            None if !attaches_existing_call
+                && params.version == Some(RealtimeConversationVersion::V3) =>
+            {
+                let current = thread.config().await;
+                let latest = Box::pin(self.config_manager.load_latest_config_with_session_layers(
+                    &current.config_layer_stack,
+                    &current.cwd,
+                ))
+                .await
+                .map_err(|error| config_load_error(&error))?;
+                // Preserve a cleared preference instead of inheriting the thread's old voice.
+                Some(latest.realtime.voice)
+            }
+            None => None,
+        };
         self.submit_core_op(
             request_id,
             thread.as_ref(),
@@ -1477,7 +1512,7 @@ impl TurnRequestProcessor {
                     }
                 }),
                 version: params.version,
-                voice: params.voice,
+                voice,
             }),
         )
         .await
@@ -1607,57 +1642,113 @@ impl TurnRequestProcessor {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "register the interrupt before the listener can consume the validated turn's terminal event"
+    )]
     async fn turn_interrupt_inner(
         &self,
         request_id: &ConnectionRequestId,
         params: TurnInterruptParams,
     ) -> Result<Option<TurnInterruptResponse>, JSONRPCErrorError> {
         let TurnInterruptParams { thread_id, turn_id } = params;
-        let is_startup_interrupt = turn_id.is_empty();
-
         let (thread_uuid, thread) = self.load_thread(&thread_id).await?;
 
-        // Record turn interrupts so we can reply when TurnAborted arrives. Startup
-        // interrupts do not have a turn and are acknowledged after submission.
-        if !is_startup_interrupt {
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let is_running = matches!(thread.agent_status().await, AgentStatus::Running);
-            {
-                let mut thread_state = thread_state.lock().await;
-                validate_interrupt_turn_id(&thread_state, &turn_id, is_running)?;
-                thread_state.pending_interrupts.push(request_id.clone());
-            }
-
-            self.outgoing
-                .record_request_turn_id(request_id, &turn_id)
-                .await;
+        // Startup interrupts have no target and are acknowledged on submission.
+        if turn_id.is_empty() {
+            self.submit_owner_interrupt(request_id, thread.as_ref())
+                .await
+                .map_err(|err| internal_error(format!("failed to interrupt startup: {err}")))?;
+            return Ok(Some(TurnInterruptResponse {}));
         }
 
-        // Submit the interrupt. Turn interrupts respond upon TurnAborted; startup
-        // interrupts respond here because startup cancellation has no turn event.
-        // Core closes the dispatch gate and cancels even if gate persistence fails.
+        // Reply when the target completes or aborts.
+        let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
+        let submit_interrupt = {
+            let mut thread_state = thread_state.lock().await;
+            // Serialize registration with listener shutdown. A handler may also have
+            // loaded the old runtime before a replacement listener was installed.
+            if thread_state.listener_shutdown
+                || (thread_state.shutdown_drain.is_some()
+                    && !thread_state.listener_matches(&thread))
+            {
+                return Err(invalid_request(
+                    "thread runtime is no longer accepting interrupts",
+                ));
+            }
+            validate_interrupt_turn_id(
+                &thread_state,
+                &turn_id,
+                matches!(thread.agent_status().await, AgentStatus::Running),
+            )?;
+            let listener_turn_id = thread_state.running_turn_id();
+            if let Some(active_turn_id) = listener_turn_id
+                && active_turn_id != turn_id
+            {
+                return Err(invalid_request(format!(
+                    "expected active turn id {turn_id} but found {active_turn_id}"
+                )));
+            }
+            let terminal_turn_id = interrupt_terminal_turn_id(&thread_state, &turn_id)
+                .ok_or_else(|| invalid_request("no active turn to interrupt"))?;
+            let submit_interrupt = match thread.current_turn_id().await {
+                // Core reserves the ID before it announces the turn.
+                Some(id)
+                    if id == terminal_turn_id
+                        && (listener_turn_id.is_some()
+                            || matches!(thread.agent_status().await, AgentStatus::Running)) =>
+                {
+                    true
+                }
+                // Core drops the slot before publishing TurnAborted.
+                None if thread_state
+                    .pending_interrupts
+                    .iter()
+                    .any(|(id, _)| id == terminal_turn_id) =>
+                {
+                    false
+                }
+                // A listener-visible turn may already be aborting. Only a review
+                // announced before task registration still needs an interrupt here.
+                None if listener_turn_id.is_some()
+                    && thread_state.turn_summaries.contains_key(terminal_turn_id) =>
+                {
+                    listener_turn_id == Some(terminal_turn_id)
+                        && thread_state.last_started_turn_id.as_deref() != Some(terminal_turn_id)
+                }
+                Some(_) | None => return Err(invalid_request("no active turn to interrupt")),
+            };
+            let terminal_turn_id = terminal_turn_id.to_owned();
+            thread_state
+                .pending_interrupts
+                .push((terminal_turn_id, request_id.clone()));
+            submit_interrupt
+        };
+
+        self.outgoing
+            .record_request_turn_id(request_id, &turn_id)
+            .await;
+        if !submit_interrupt {
+            return Ok(None);
+        }
+
         match self
             .submit_owner_interrupt(request_id, thread.as_ref())
             .await
         {
-            Ok(_) if is_startup_interrupt => Ok(Some(TurnInterruptResponse {})),
             Ok(_) => Ok(None),
             Err(err) => {
-                if !is_startup_interrupt {
-                    let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-                    let mut thread_state = thread_state.lock().await;
-                    thread_state
-                        .pending_interrupts
-                        .retain(|pending_request_id| pending_request_id != request_id);
-                }
-                let interrupt_target = if is_startup_interrupt {
-                    "startup"
-                } else {
-                    "turn"
+                let mut state = thread_state.lock().await;
+                let Some(index) = state
+                    .pending_interrupts
+                    .iter()
+                    .position(|(_, id)| id == request_id)
+                else {
+                    // The listener already settled this request.
+                    return Ok(None);
                 };
-                Err(internal_error(format!(
-                    "failed to interrupt {interrupt_target}: {err}"
-                )))
+                state.pending_interrupts.remove(index);
+                Err(internal_error(format!("failed to interrupt turn: {err}")))
             }
         }
     }
@@ -1701,6 +1792,24 @@ impl TurnRequestProcessor {
         .await
     }
 }
+
+fn interrupt_terminal_turn_id<'a>(state: &'a ThreadState, turn_id: &'a str) -> Option<&'a str> {
+    let terminal_id = if state.forwarded_turn_id.as_deref() == Some(turn_id) {
+        // History can still name the delegate after the outer turn has finished.
+        let outer_id = state.last_started_turn_id.as_deref()?;
+        if !state.turn_summaries.contains_key(outer_id) {
+            return None;
+        }
+        outer_id
+    } else {
+        turn_id
+    };
+    (state.last_terminal_turn_id.as_deref() != Some(terminal_id)).then_some(terminal_id)
+}
+
+#[cfg(test)]
+#[path = "turn_interrupt_tests.rs"]
+mod turn_interrupt_tests;
 
 fn validate_interrupt_turn_id(
     state: &ThreadState,
@@ -1750,16 +1859,29 @@ mod tests {
         let legacy = turn_input_submission_error(&fatal, "opaque failure".into(), false, false);
         assert_eq!(legacy.code, -32603);
         assert!(legacy.data.is_none());
-        let before_admission = turn_input_submission_error(&fatal, "opaque failure".into(), true, false);
-        assert_eq!(before_admission.data, Some(serde_json::json!({
-            "ownerInputBatchNotSubmitted": "preparation_failed"
-        })));
+        let before_admission =
+            turn_input_submission_error(&fatal, "opaque failure".into(), true, false);
+        assert_eq!(
+            before_admission.data,
+            Some(serde_json::json!({
+                "ownerInputBatchNotSubmitted": "preparation_failed"
+            }))
+        );
         for (reason, code) in [
             (NotSubmittedReason::NotIdle, "not_idle"),
-            (NotSubmittedReason::PendingTriggerTurn, "pending_trigger_turn"),
+            (
+                NotSubmittedReason::PendingTriggerTurn,
+                "pending_trigger_turn",
+            ),
             (NotSubmittedReason::PlanMode, "plan_mode"),
-            (NotSubmittedReason::OwnerInputBatchHistoryUnavailable, "history_unavailable"),
-            (NotSubmittedReason::OwnerInputBatchRecoveryRequired, "recovery_required"),
+            (
+                NotSubmittedReason::OwnerInputBatchHistoryUnavailable,
+                "history_unavailable",
+            ),
+            (
+                NotSubmittedReason::OwnerInputBatchRecoveryRequired,
+                "recovery_required",
+            ),
         ] {
             let wire = serde_json::to_value(owner_batch_not_submitted_error(&reason)).unwrap();
             assert_eq!(wire["code"], -32600);

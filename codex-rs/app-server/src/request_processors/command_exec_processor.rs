@@ -1,8 +1,9 @@
 use super::*;
 use codex_core::exec_env::inject_apply_patch_env;
 use codex_core::windows_sandbox::local_binding_policy_for_sandbox;
-use codex_core::windows_sandbox::managed_proxy_routing_for_windows_sandbox;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
+use codex_sandboxing::managed_proxy_routing_for_windows_sandbox;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub(crate) struct CommandExecRequestProcessor {
@@ -36,9 +37,10 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: CommandExecParams,
+        disconnect: CancellationToken,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.require_local_environment()?;
-        self.exec_one_off_command(request_id, params)
+        self.exec_one_off_command(request_id, params, disconnect)
             .await
             .map(|()| None)
     }
@@ -94,8 +96,9 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: CommandExecParams,
+        disconnect: CancellationToken,
     ) -> Result<(), JSONRPCErrorError> {
-        self.exec_one_off_command_inner(request_id.clone(), params)
+        self.exec_one_off_command_inner(request_id.clone(), params, disconnect)
             .await
     }
 
@@ -103,6 +106,7 @@ impl CommandExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: CommandExecParams,
+        disconnect: CancellationToken,
     ) -> Result<(), JSONRPCErrorError> {
         tracing::debug!("ExecOneOffCommand params: {params:?}");
 
@@ -187,11 +191,13 @@ impl CommandExecRequestProcessor {
             Some(output_bytes_cap.unwrap_or(DEFAULT_OUTPUT_BYTES_CAP))
         };
         let expiration = if disable_timeout {
-            ExecExpiration::Cancellation(CancellationToken::new())
+            ExecExpiration::Cancellation(disconnect.clone())
         } else {
-            match timeout_ms {
-                Some(timeout_ms) => timeout_ms.into(),
-                None => ExecExpiration::DefaultTimeout,
+            ExecExpiration::TimeoutOrCancellation {
+                timeout: std::time::Duration::from_millis(
+                    timeout_ms.unwrap_or(codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
+                ),
+                cancellation: disconnect.clone(),
             }
         };
         let capture_policy = if disable_output_cap {
@@ -239,7 +245,11 @@ impl CommandExecRequestProcessor {
                 config.managed_network_requirements_enabled(),
                 config.effective_workspace_roots(),
             )
-        } else if let Some(policy) = sandbox_policy.map(|policy| policy.to_core()) {
+        } else if let Some(policy) = sandbox_policy
+            .map(|policy| policy.try_to_core())
+            .transpose()
+            .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?
+        {
             let mut permissions = self.config.permissions.clone();
             permissions
                 .set_legacy_sandbox_policy(policy, &sandbox_cwd)
@@ -328,6 +338,7 @@ impl CommandExecRequestProcessor {
         .map_err(|err| internal_error(format!("exec failed: {err}")))?;
         self.command_exec_manager
             .start(StartCommandExecParams {
+                disconnect,
                 outgoing,
                 request_id: request_for_task,
                 process_id,

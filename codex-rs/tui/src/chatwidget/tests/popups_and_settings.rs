@@ -3150,7 +3150,7 @@ async fn experimental_features_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn experimental_features_toggle_saves_on_exit() {
+async fn experimental_features_cancel_discards_toggle() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let mut keymap = crate::keymap::RuntimeKeymap::defaults().list;
@@ -3179,25 +3179,8 @@ async fn experimental_features_toggle_saves_on_exit() {
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
-    assert!(
-        !chat.has_active_view(),
-        "remapped cancel must save and close"
-    );
-
-    let mut updates = None;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::SaveExperimentalFeatures {
-            updates: event_updates,
-            ..
-        } = event
-        {
-            updates = Some(event_updates);
-            break;
-        }
-    }
-
-    let updates = updates.expect("expected SaveExperimentalFeatures event");
-    assert_eq!(updates, vec![(expected_feature.key().to_string(), true)]);
+    assert!(!chat.has_active_view(), "remapped cancel must close");
+    assert!(rx.try_recv().is_err(), "cancel must discard the toggle");
 }
 
 #[tokio::test]
@@ -4459,7 +4442,7 @@ async fn skills_response_for_current_cwd_populates_mentions() {
             errors: vec![],
         }],
     };
-    chat.set_skills_from_response(&response);
+    chat.set_skills_from_response(response.clone());
     assert_eq!(chat.skills_all.len(), 1);
     chat.insert_str("$bio");
     assert!(render_bottom_popup(&chat, 100).contains("bio-review-bridge"));
@@ -4478,10 +4461,10 @@ async fn late_skills_response_for_other_cwd_preserves_current_mentions() {
             errors: vec![],
         }],
     };
-    chat.set_skills_from_response(&response);
+    chat.set_skills_from_response(response.clone());
     assert_eq!(chat.skills_all.len(), 2);
     response.data[0].cwd = chat.config.cwd.join("old-launch-directory").to_path_buf();
-    chat.set_skills_from_response(&response);
+    chat.set_skills_from_response(response.clone());
     assert_eq!(chat.skills_all.len(), 2);
     chat.insert_str("$bio");
     assert!(render_bottom_popup(&chat, 100).contains("bio-review-bridge"));
@@ -4489,7 +4472,7 @@ async fn late_skills_response_for_other_cwd_preserves_current_mentions() {
     // A genuinely empty response for the active directory must still clear it.
     response.data[0].cwd = chat.config.cwd.to_path_buf();
     response.data[0].skills.clear();
-    chat.set_skills_from_response(&response);
+    chat.set_skills_from_response(response.clone());
     assert!(chat.skills_all.is_empty());
     assert!(!render_bottom_popup(&chat, 100).contains("bio-review-bridge"));
 }

@@ -1,10 +1,11 @@
 //! Owner batches use the idle reservation and a durable, model-invisible intent.
 //! An intent is never an in-context receipt and is never replayed as input.
 use super::*;
+use codex_protocol::protocol::EventMsg;
 use codex_history::RolloutItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::OwnerInputBatchAdmission;
-use codex_protocol::turn_input::OwnerInput;
+type OwnerInput = codex_protocol::turn_input::OwnerInput<ResolvedUserInput>;
 use codex_rollout::RolloutRecorder;
 use std::collections::BTreeSet;
 
@@ -40,9 +41,12 @@ pub(super) fn validate(request: &TurnInputRequest, mode: &TurnInputMode) -> Code
             || id.len() > 256
             || !ids.insert(id)
             || content.is_empty()
-            || content
-                .iter()
-                .any(|part| matches!(part, UserInput::Audio { .. } | UserInput::LocalAudio { .. }))
+            || content.iter().any(|part| {
+                matches!(
+                    part.to_user_input(),
+                    UserInput::Audio { .. } | UserInput::LocalAudio { .. }
+                )
+            })
         {
             return Err(CodexErr::InvalidRequest(
                 "invalid or duplicate ownerInputs identity/input".into(),
@@ -152,17 +156,32 @@ pub(super) async fn admit(
     Ok(())
 }
 
+pub(super) async fn finish_start(
+    session: &Session,
+    turn_state: &Arc<tokio::sync::Mutex<TurnState>>,
+    submission: TurnInputSubmission,
+) -> CodexResult<TurnInputSubmission> {
+    if !matches!(submission, TurnInputSubmission::Started { .. }) {
+        // Durable intent already seals these IDs if shutdown or interruption
+        // wins task registration. A refusal here must never promise safe resend.
+        *session.owner_batch_uncertain.lock().await = true;
+        session.clear_reserved_idle_turn(turn_state).await;
+        return Err(CodexErr::Fatal(
+            "ownerInputs outcome unknown after durable admission; query original IDs, do not resend".into(),
+        ));
+    }
+    Ok(submission)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+use codex_protocol::protocol::EventMsg;
     use crate::session::tests::{attach_thread_persistence, make_session_and_context};
     use codex_thread_store::PersistContext;
 
-    fn text(value: &str) -> Vec<UserInput> {
-        vec![UserInput::Text {
-            text: value.into(),
-            text_elements: Vec::new(),
-        }]
+    fn text(value: &str) -> Vec<ResolvedUserInput> {
+        vec![ResolvedUserInput::text(value.to_owned())]
     }
 
     fn batch() -> (Vec<OwnerInput>, SubmittedTurnInput) {
@@ -182,6 +201,76 @@ mod tests {
                 client_id: Some("draft".into()),
             },
         )
+    }
+
+    #[tokio::test]
+    async fn owner_input_batch_cancelled_reservation_cannot_recreate_a_turn() {
+        let (session, context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let reserved = reserve_idle_turn(
+            &session,
+            IdleReservation::Origin(TurnStartOrigin::Explicit),
+            None,
+        )
+        .await
+        .unwrap();
+        session.clear_reserved_idle_turn(&reserved).await;
+        let outcome = session
+            .start_task_with_reservation(
+                Arc::new(context),
+                Vec::new(),
+                RegularTask::new(),
+                Some(&reserved),
+            )
+            .await;
+        assert!(matches!(
+            outcome,
+            TurnInputSubmission::NotSubmitted {
+                reason: NotSubmittedReason::Interrupted,
+            }
+        ));
+        assert!(session.active_turn.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn owner_input_batch_cancelled_after_durable_intent_remains_unknown() {
+        let (mut session, context) = make_session_and_context().await;
+        let _path = attach_thread_persistence(&mut session).await;
+        let session = Arc::new(session);
+        let reserved = reserve_idle_turn(
+            &session,
+            IdleReservation::Origin(TurnStartOrigin::Explicit),
+            None,
+        )
+        .await
+        .unwrap();
+        let (prefix, carrier) = batch();
+        admit(&session, &context, &prefix, &carrier).await.unwrap();
+        session.clear_reserved_idle_turn(&reserved).await;
+        let submission = session
+            .start_task_with_reservation(
+                Arc::new(context),
+                Vec::new(),
+                RegularTask::new(),
+                Some(&reserved),
+            )
+            .await;
+        let error = finish_start(&session, &reserved, submission)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.details(),
+            codex_protocol::error::CodexErrorDetails::Fatal(_)
+        ));
+        assert!(session.active_turn.lock().await.is_none());
+        let fresh = SubmittedTurnInput::UserInput {
+            content: text("fresh"),
+            client_id: Some("never-admitted".into()),
+        };
+        assert_eq!(
+            check(&session, &[], &fresh).await.unwrap(),
+            Some(NotSubmittedReason::OwnerInputBatchRecoveryRequired)
+        );
     }
 
     #[tokio::test]
@@ -213,8 +302,10 @@ mod tests {
                 .any(|item| matches!(item, RolloutItem::EventMsg(EventMsg::ItemCompleted(_))))
         );
         *session.owner_batch_uncertain.lock().await = true;
-        assert_eq!(check(&session, &[], &changed_carrier).await.unwrap(),
-            Some(NotSubmittedReason::OwnerInputBatchRecoveryRequired));
+        assert_eq!(
+            check(&session, &[], &changed_carrier).await.unwrap(),
+            Some(NotSubmittedReason::OwnerInputBatchRecoveryRequired)
+        );
     }
 
     #[tokio::test]
@@ -269,7 +360,9 @@ mod tests {
                     TurnItem::UserMessage(message) => message.client_id.as_deref(),
                     _ => None,
                 },
-                RolloutItem::EventMsg(EventMsg::UserMessage(message)) => message.client_id.as_deref(),
+                RolloutItem::EventMsg(EventMsg::UserMessage(message)) => {
+                    message.client_id.as_deref()
+                }
                 _ => None,
             })
             .collect();
@@ -287,15 +380,30 @@ mod tests {
         let (prefix, carrier) = batch();
         assert_eq!(check(&session, &prefix, &carrier).await.unwrap(), None);
         // Close the real private persistence writer between preflight and admit.
-        session.services.live_thread.as_ref().unwrap().shutdown().await.unwrap();
-        let error = admit(&session, &context, &prefix, &carrier).await.unwrap_err();
-        assert!(matches!(error.details(), codex_protocol::error::CodexErrorDetails::Fatal(_)));
+        session
+            .services
+            .live_thread
+            .as_ref()
+            .unwrap()
+            .shutdown()
+            .await
+            .unwrap();
+        let error = admit(&session, &context, &prefix, &carrier)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.details(),
+            codex_protocol::error::CodexErrorDetails::Fatal(_)
+        ));
         assert!(*session.owner_batch_uncertain.lock().await);
         let new_carrier = SubmittedTurnInput::UserInput {
-            content: text("fresh"), client_id: Some("fresh".into()),
+            content: text("fresh"),
+            client_id: Some("fresh".into()),
         };
-        assert_eq!(check(&session, &[], &new_carrier).await.unwrap(),
-            Some(NotSubmittedReason::OwnerInputBatchRecoveryRequired));
+        assert_eq!(
+            check(&session, &[], &new_carrier).await.unwrap(),
+            Some(NotSubmittedReason::OwnerInputBatchRecoveryRequired)
+        );
     }
 
     #[tokio::test]
@@ -306,12 +414,20 @@ mod tests {
         live.flush().await.unwrap();
         live.persist_for_read().await.unwrap();
         use tokio::io::AsyncWriteExt;
-        let mut file = tokio::fs::OpenOptions::new().append(true).open(path).await.unwrap();
-        file.write_all(b"\n{invalid-private-history\n").await.unwrap();
+        let mut file = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .await
+            .unwrap();
+        file.write_all(b"\n{invalid-private-history\n")
+            .await
+            .unwrap();
         file.flush().await.unwrap();
         let (prefix, carrier) = batch();
-        assert_eq!(check(&session, &prefix, &carrier).await.unwrap(),
-            Some(NotSubmittedReason::OwnerInputBatchHistoryUnavailable));
+        assert_eq!(
+            check(&session, &prefix, &carrier).await.unwrap(),
+            Some(NotSubmittedReason::OwnerInputBatchHistoryUnavailable)
+        );
         assert!(!*session.owner_batch_uncertain.lock().await);
     }
 
@@ -320,24 +436,38 @@ mod tests {
         let (mut session, _) = make_session_and_context().await;
         attach_thread_persistence(&mut session).await;
         let session = Arc::new(session);
-        session.input_queue.enqueue_mailbox_communication(
-            codex_protocol::protocol::InterAgentCommunication::new(
-                codex_protocol::AgentPath::root(),
-                codex_protocol::AgentPath::root(),
-                Vec::new(), "pending trigger".into(), true,
-            ).into(), Default::default(),
-        ).await;
+        session
+            .input_queue
+            .enqueue_mailbox_communication(
+                codex_protocol::protocol::InterAgentCommunication::new(
+                    codex_protocol::AgentPath::root(),
+                    codex_protocol::AgentPath::root(),
+                    Vec::new(),
+                    "pending trigger".into(),
+                    true,
+                )
+                .into(),
+                Default::default(),
+            )
+            .await;
         let (prefix, carrier) = batch();
         let admission = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let outcome = handle(
             &session,
-            TurnInputRequest::new(carrier.clone()).with_owner_inputs(Some(prefix.clone()))
+            TurnInputRequest::new(carrier.clone())
+                .with_owner_inputs(Some(prefix.clone()))
                 .with_owner_input_batch_admission(Arc::clone(&admission)),
-            TurnInputMode::StartOrSteer, "batch-behind-mailbox".into(),
-        ).await.unwrap();
-        assert_eq!(outcome, TurnInputSubmission::NotSubmitted {
-            reason: NotSubmittedReason::PendingTriggerTurn,
-        });
+            TurnInputMode::StartOrSteer,
+            "batch-behind-mailbox".into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            TurnInputSubmission::NotSubmitted {
+                reason: NotSubmittedReason::PendingTriggerTurn,
+            }
+        );
         assert!(session.active_turn.lock().await.is_none());
         assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
         assert!(!admission.load(std::sync::atomic::Ordering::Acquire));
@@ -355,7 +485,8 @@ mod tests {
         let admission = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let outcome = handle(
             &session,
-            TurnInputRequest::new(carrier).with_owner_inputs(Some(prefix))
+            TurnInputRequest::new(carrier)
+                .with_owner_inputs(Some(prefix))
                 .with_owner_input_batch_admission(Arc::clone(&admission)),
             TurnInputMode::StartOrSteer,
             "batch".into(),

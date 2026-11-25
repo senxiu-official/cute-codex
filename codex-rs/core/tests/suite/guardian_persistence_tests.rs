@@ -135,10 +135,13 @@ impl ThreadStore for GatedReviewerStore {
                     },
                 )
                 .await?;
-                let reviews = history.items.iter().filter(|item| matches!(
-                    item, RolloutItem::ResponseItem(item)
-                        if matches!(&item.item, ResponseItem::Message { role, .. } if role == "assistant")
-                )).count();
+                // Canonical assistant text can flush before the turn is complete.
+                // Gate the terminal checkpoint that must precede releasing approval.
+                let reviews = history
+                    .items
+                    .iter()
+                    .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnComplete(_))))
+                    .count();
                 let mut reviewer = self.reviewer.lock().await;
                 if reviews > reviewer.reviews {
                     reviewer.reviews = reviews;
@@ -232,7 +235,7 @@ async fn guardian_saves_each_completed_review_before_releasing_its_action() -> a
                 .filter(|item| matches!(item, RolloutItem::EventMsg(EventMsg::TurnComplete(_))))
                 .count(),
             review,
-            "the first save after inference must include turn completion"
+            "the approval barrier must include the completed review"
         );
         // The parent cannot consume the approval while its review is still being saved.
         assert!(

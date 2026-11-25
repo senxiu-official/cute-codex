@@ -163,6 +163,7 @@ impl ChatWidget {
                                     server: server.clone(),
                                     tool: tool.clone(),
                                     arguments: Some(arguments.clone()),
+                                    environment_id: None,
                                 }
                                 .supports_compact_presentation()
                         }

@@ -13,6 +13,7 @@ use codex_protocol::external_input::Source;
 use codex_protocol::external_input::SourceKind;
 use codex_protocol::external_input::recover;
 use codex_protocol::external_input_status::DeliveryState;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_rollout::RolloutRecorder;
 use codex_thread_store::PersistContext;
@@ -88,7 +89,7 @@ async fn fixture() -> (Arc<Session>, Arc<TurnContext>, std::path::PathBuf) {
 }
 
 fn request(envelopes: Vec<Envelope>) -> TurnInputRequest {
-    TurnInputRequest::user_input(vec![UserInput::Text {
+    TurnInputRequest::user_input(vec![ResolvedUserInput::Text {
         text: "plain owner text".into(),
         text_elements: Vec::new(),
     }])
@@ -546,4 +547,102 @@ async fn owner_carries_rejected_hook_releases_even_if_old_input_batch_is_retaine
         DeliveryState::Pending
     );
     drop(retry);
+}
+
+#[tokio::test]
+async fn owner_carries_failure_preserves_prior_sibling_history_error_and_audio_cleanup() {
+    use crate::realtime_history::RealtimeHistoryState;
+    use codex_protocol::protocol::{
+        RealtimeConversationStartedEvent, RealtimeConversationVersion, RealtimeHandoffRequested,
+        TurnStartedEvent,
+    };
+    let (mut session, turn, _path) = fixture().await;
+    let mut history = RealtimeHistoryState::default();
+    history.frame_enrollment = Some(true);
+    history.observe(&EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn.sub_id.clone(),
+        turn_attribution: None,
+        root_turn_id: None,
+        trace_id: None,
+        started_at: None,
+        model_context_window: None,
+        collaboration_mode_kind: ModeKind::Default,
+    }));
+    history.observe(&EventMsg::RealtimeConversationStarted(
+        RealtimeConversationStartedEvent {
+            realtime_session_id: Some("sibling-write-failure".into()),
+            version: RealtimeConversationVersion::V2,
+        },
+    ));
+    let prepared = history
+        .prepare_handoff(&RealtimeHandoffRequested {
+            handoff_id: "first-sibling".into(),
+            item_id: "first-item".into(),
+            input_transcript: "first sibling needs a durable seal".into(),
+            active_transcript: Vec::new(),
+        })
+        .unwrap();
+    assert!(history.reserve_handoff(prepared.id));
+    let mutable = Arc::get_mut(&mut session).unwrap();
+    // The first realtime input cannot seal; the second ordinary input can still
+    // record in memory, but its carrier then encounters the unavailable writer.
+    mutable.services.live_thread = None;
+    mutable.realtime_history = Some(tokio::sync::Mutex::new(history));
+    let first = TurnInput::UserInput {
+        content: vec![ResolvedUserInput::Text {
+            text: prepared.input,
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+        metadata: UserInputMetadata {
+            realtime_handoff_id: Some(prepared.id),
+            ..Default::default()
+        },
+    };
+    let carries = session
+        .reserve_owner_carries(vec![envelope(&session, "second-carry")])
+        .await
+        .unwrap();
+    let mut second = pending_turn_input(
+        &session,
+        request(Vec::new()).input,
+        None,
+        &turn.sub_id,
+        UserInputMetadata::default(),
+    )
+    .await;
+    let TurnInput::UserInput { metadata, .. } = &mut second else {
+        panic!("owner input")
+    };
+    metadata.owner_carries = Some(carries);
+    session
+        .state
+        .lock()
+        .await
+        .pending_audio_duration_ids
+        .insert("pending-audio-before-failure".into());
+    let result = super::super::turn::run_hooks_and_record_inputs(
+        &session,
+        &turn,
+        &turn.capture_current_model_info(),
+        &[first, second],
+        PersistContext::Standard,
+    )
+    .await;
+    assert!(
+        matches!(&result, Err(error) if matches!(error.details(), codex_protocol::error::CodexErrorDetails::Io(_))),
+        "must preserve the earlier history error: {result:?}"
+    );
+    assert!(
+        session
+            .state
+            .lock()
+            .await
+            .pending_audio_duration_ids
+            .is_empty()
+    );
+    let state = session.external_input.lock().await;
+    let runtime = state.as_ref().unwrap();
+    assert!(runtime.poisoned);
+    assert!(runtime.recovery.messages.is_empty());
 }

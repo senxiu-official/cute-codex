@@ -666,9 +666,12 @@ PY"#
     assert!(elapsed.parse::<u128>()? > 0);
     let message = &output[output.find(prefix).context("missing disconnect prefix")?..];
     let message = &message[..prefix.len() + elapsed.len() + suffix.len()];
-    insta::assert_snapshot!(message.replacen(elapsed, "<elapsed>", 1), @r"
-    Network request disconnected after <elapsed> ms, before approval could complete
-    ");
+    // Both parameterized transports share this inline snapshot.
+    insta::allow_duplicates! {
+        insta::assert_snapshot!(message.replacen(elapsed, "<elapsed>", 1), @r"
+        Network request disconnected after <elapsed> ms, before approval could complete
+        ");
+    }
     Ok(())
 }
 

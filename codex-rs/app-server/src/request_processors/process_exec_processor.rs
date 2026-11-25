@@ -70,6 +70,7 @@ impl ProcessExecRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ProcessSpawnParams,
+        disconnect: CancellationToken,
     ) -> Result<(), JSONRPCErrorError> {
         self.require_local_environment()?;
         let ProcessSpawnParams {
@@ -126,6 +127,7 @@ impl ProcessExecRequestProcessor {
 
         self.process_exec_manager
             .start(StartProcessParams {
+                disconnect,
                 outgoing: self.outgoing.clone(),
                 request_id,
                 process_handle,
@@ -220,6 +222,7 @@ struct ProcessControlRequest {
 }
 
 struct StartProcessParams {
+    disconnect: CancellationToken,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: ConnectionRequestId,
     process_handle: String,
@@ -235,6 +238,7 @@ struct StartProcessParams {
 }
 
 struct RunProcessParams {
+    disconnect: CancellationToken,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: ConnectionRequestId,
     process_handle: String,
@@ -268,6 +272,7 @@ struct ProcessOutputCapture {
 impl ProcessExecManager {
     async fn start(&self, params: StartProcessParams) -> Result<(), JSONRPCErrorError> {
         let StartProcessParams {
+            disconnect,
             outgoing,
             request_id,
             process_handle,
@@ -282,6 +287,9 @@ impl ProcessExecManager {
             size,
         } = params;
 
+        if disconnect.is_cancelled() {
+            return Err(invalid_request("process/spawn connection is closed"));
+        }
         let (program, args) = command
             .split_first()
             .ok_or_else(|| invalid_request("command must not be empty"))?;
@@ -348,6 +356,7 @@ impl ProcessExecManager {
         let sessions = Arc::clone(&self.sessions);
         tokio::spawn(async move {
             run_process(RunProcessParams {
+                disconnect,
                 outgoing,
                 request_id,
                 process_handle,
@@ -488,6 +497,7 @@ impl ProcessExecManager {
 
 async fn run_process(params: RunProcessParams) {
     let RunProcessParams {
+        disconnect,
         outgoing,
         request_id,
         process_handle,
@@ -510,6 +520,7 @@ async fn run_process(params: RunProcessParams) {
     } = spawned;
     tokio::pin!(exit_rx);
     let mut expiration_outcome = None;
+    let mut disconnected = false;
     let process_exited = CancellationToken::new();
 
     let stdout_handle = collect_spawn_process_output(SpawnProcessOutputParams {
@@ -537,6 +548,10 @@ async fn run_process(params: RunProcessParams) {
 
     let exit_code = loop {
         tokio::select! {
+            _ = disconnect.cancelled(), if !disconnected => {
+                disconnected = true;
+                session.request_terminate();
+            }
             control = control_rx.recv(), if control_open => {
                 match control {
                     Some(ProcessControlRequest { control, response_tx }) => {

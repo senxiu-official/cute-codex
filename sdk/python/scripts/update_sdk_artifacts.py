@@ -608,10 +608,37 @@ def generate_v2_all(schema_dir: Path, *, format_output: bool = True) -> None:
     _preserve_inline_media_class_names(out_path)
     _add_legacy_image_generation_thread_item_alias(out_path)
     _preserve_open_enum(out_path, "CodexErrorInfoValue", allow_empty=True)
+    _preserve_open_enum(out_path, "DaybreakAvailability")
     _preserve_reasoning_effort_enum(out_path)
     _preserve_thread_source_enum(out_path)
     _preserve_open_enum(out_path, "PlanType")
     _normalize_generated_timestamps(out_path)
+    _add_answer_display_fallback(out_path)
+
+
+def _add_answer_display_fallback(out_path: Path) -> None:
+    """Keep items readable and restricted when their display instruction is unsupported."""
+    source = out_path.read_text()
+    header = "class AgentMessageModeration(BaseModel):"
+    if source.count(header) != 1:
+        raise RuntimeError("Generated SDK is missing a unique AgentMessageModeration class")
+    source = source.replace(
+        "from pydantic import ", "from pydantic import ValidationError, model_validator, ", 1
+    )
+    validator = """
+    @model_validator(mode="before")
+    @classmethod
+    def _read_display(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "moderated" not in data or data.get("display") is None:
+            return data
+        try:
+            return {**data, "display": AgentMessageDisplay.model_validate(data["display"])}
+        except ValidationError:
+            return {**data, "moderated": True, "display": None}
+"""
+    out_path.write_text(
+        source.replace(header, header + "\n" + validator, 1), encoding="utf-8", newline="\n"
+    )
 
 
 def _preserve_inline_media_class_names(out_path: Path) -> None:
@@ -632,7 +659,7 @@ def _preserve_inline_media_class_names(out_path: Path) -> None:
             raise RuntimeError(f"Generated SDK already defines {stable_name}")
         source = re.sub(rf"\b{re.escape(generated_name)}\b", stable_name, source)
 
-    out_path.write_text(source)
+    out_path.write_text(source, encoding="utf-8", newline="\n")
 
 
 def _add_legacy_image_generation_thread_item_alias(out_path: Path) -> None:
@@ -648,7 +675,9 @@ def _add_legacy_image_generation_thread_item_alias(out_path: Path) -> None:
         class_end = len(source)
 
     alias = "\n\nImageGenerationThreadItem = ResultThreadItem\n"
-    out_path.write_text(source[:class_end] + alias + source[class_end:])
+    out_path.write_text(
+        source[:class_end] + alias + source[class_end:], encoding="utf-8", newline="\n"
+    )
 
 
 def _preserve_reasoning_effort_enum(out_path: Path) -> None:
@@ -683,7 +712,9 @@ def _preserve_reasoning_effort_enum(out_path: Path) -> None:
         member._value_ = value
         return member
 """
-    out_path.write_text(source[:class_start] + open_enum + source[class_end:])
+    out_path.write_text(
+        source[:class_start] + open_enum + source[class_end:], encoding="utf-8", newline="\n"
+    )
 
 
 def _preserve_thread_source_enum(out_path: Path) -> None:
@@ -710,7 +741,9 @@ def _preserve_thread_source_enum(out_path: Path) -> None:
         member._value_ = value
         return member
 """
-    out_path.write_text(source[:class_start] + open_enum + source[class_end:])
+    out_path.write_text(
+        source[:class_start] + open_enum + source[class_end:], encoding="utf-8", newline="\n"
+    )
 
 
 def _preserve_open_enum(out_path: Path, name: str, *, allow_empty: bool = False) -> None:
@@ -743,7 +776,9 @@ def _preserve_open_enum(out_path: Path, name: str, *, allow_empty: bool = False)
         member._value_ = value
         return member
 """
-    out_path.write_text(source[:class_start] + class_source + source[class_end:])
+    out_path.write_text(
+        source[:class_start] + class_source + source[class_end:], encoding="utf-8", newline="\n"
+    )
 
 
 def _notification_specs(schema_dir: Path) -> list[tuple[str, str]]:
@@ -880,7 +915,7 @@ def generate_notification_registry(schema_dir: Path) -> None:
         ]
     )
 
-    out.write_text("\n".join(lines))
+    out.write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def _normalize_generated_timestamps(root: Path) -> None:
@@ -890,7 +925,7 @@ def _normalize_generated_timestamps(root: Path) -> None:
         content = py_file.read_text()
         normalized = timestamp_re.sub("#   timestamp: <normalized>", content)
         if normalized != content:
-            py_file.write_text(normalized)
+            py_file.write_text(normalized, encoding="utf-8", newline="\n")
 
 
 FIELD_ANNOTATION_OVERRIDES: dict[str, str] = {
@@ -1410,7 +1445,7 @@ def generate_public_api_flat_methods(*, format_output: bool = True) -> None:
         "AsyncThread.flat_methods",
         _render_thread_block(turn_start_fields, is_async=True),
     )
-    public_api_path.write_text(source)
+    public_api_path.write_text(source, encoding="utf-8", newline="\n")
     if format_output:
         run_python_module("ruff", ["format", str(public_api_path)], cwd=sdk_root())
 

@@ -1,7 +1,7 @@
 //! Cutex fork: thread_history migration numbering guards.
 //!
 //! The fork owns thread_history versions 7 to 9; upstream's `0008_thread_turn_root` is renumbered
-//! to 10. Live databases record these versions with their checksums, so the fork files must stay
+//! to 10, and upstream realtime observation indexes to 11. Live databases record these versions with their checksums, so the fork files must stay
 //! byte-identical and every version unique.
 
 use codex_utils_absolute_path::test_support::PathExt;
@@ -64,7 +64,7 @@ fn thread_history_versions_are_unique_and_fork_checksums_are_pinned() {
         .iter()
         .map(|migration| migration.version)
         .collect::<Vec<_>>();
-    assert_eq!(versions, (1..=10).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=11).collect::<Vec<_>>());
     for (version, description, checksum) in FORK_THREAD_HISTORY_CHECKSUMS {
         let migration = THREAD_HISTORY_MIGRATOR
             .migrations
@@ -102,7 +102,7 @@ async fn r51_thread_history_db_migrates_to_turn_roots_and_stays_writable_by_r51(
         .expect("r51 writer inserts a turn");
     pool.close().await;
 
-    // r53 opens it: only version 10 is new.
+    // The candidate opens it: turn roots and realtime observation indexes are new.
     let pool = sqlite
         .open_thread_history_db(&THREAD_HISTORY_MIGRATOR, /*telemetry_override*/ None)
         .await
@@ -112,7 +112,7 @@ async fn r51_thread_history_db_migrates_to_turn_roots_and_stays_writable_by_r51(
             .fetch_all(&pool)
             .await
             .expect("applied versions should load");
-    assert_eq!(applied, (1..=10).collect::<Vec<_>>());
+    assert_eq!(applied, (1..=11).collect::<Vec<_>>());
     sqlx::query("INSERT INTO thread_turns (thread_id, turn_id, rollout_ordinal, status, root_turn_id) VALUES ('thread-1', 'turn-2', 1, 'completed', 'turn-1')")
         .execute(&pool)
         .await

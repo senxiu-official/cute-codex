@@ -15,7 +15,7 @@ fn cutex_rows_share_preview_boundaries_and_do_not_create_blank_rows() {
     let text = |items: Vec<StatusLineItem>| {
         data.status_lines_for_items(items, false)
             .into_iter()
-            .map(|row| row.into_hyperlink_line().line.to_string())
+            .map(|row| row.as_native().expect("native row").line.to_string())
             .collect::<Vec<_>>()
     };
     assert_eq!(text(vec![A, N, B]), vec!["sol", "~/中文"]);
@@ -39,11 +39,11 @@ fn spacing_keeps_columns_without_dots_or_disturbing_normal_separators() {
     let rows = data.status_lines_for_items([A, B, N, S, A, S, B], false);
     assert_eq!(
         rows.iter()
-            .map(|row| row.clone().into_hyperlink_line().line.to_string())
+            .map(|row| row.as_native().expect("native row").line.to_string())
             .collect::<Vec<_>>(),
         vec!["sol · ~/中文", "    sol    ~/中文"]
     );
-    assert_eq!(rows[1].width(), 17);
+    assert_eq!(rows[1].as_native().expect("native row").width(), 17);
     // Invisible separators still occupy span slots used by notification styling and animation.
-    assert_eq!(rows[1].clone().into_hyperlink_line().line.spans.len(), 7);
+    assert_eq!(rows[1].as_native().expect("native row").line.spans.len(), 7);
 }

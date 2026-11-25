@@ -12,6 +12,7 @@ fn cell(server: &str, tool: &str, args: Value) -> McpToolCallCell {
             server: server.into(),
             tool: tool.into(),
             arguments: Some(args),
+            environment_id: None,
         },
         false,
     )

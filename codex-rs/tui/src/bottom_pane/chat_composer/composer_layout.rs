@@ -7,15 +7,84 @@ use crate::render::renderable::Renderable;
 use crate::tui::FrameRequester;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-
-pub(super) const MAX_FOOTER_ROWS: u16 = 4;
+use ratatui::layout::Size;
 
 struct ComposerRows {
     input: u16,
     above_input: u16,
     thumbnails: u16,
+    footer: FooterRows,
+}
+
+/// Allocates status and hint rows from the space left by the composer.
+pub(crate) struct FooterLayout {
+    cap: u16,
+    wanted_hints: u16,
+    reserved_hints: u16,
+    /// Explicit status rows (configured prefix rows plus the final status row).
+    status_rows: u16,
+}
+
+pub(crate) struct FooterRows {
     status: u16,
     hints: u16,
+}
+
+impl FooterLayout {
+    pub(crate) fn new(
+        workspace_height: Option<u16>,
+        wanted_hints: u16,
+        priority_hint_rows: u16,
+    ) -> Self {
+        Self {
+            cap: workspace_height.map_or(2, |height| (height.saturating_add(2) / 4).clamp(2, 4)),
+            wanted_hints,
+            reserved_hints: wanted_hints.min(priority_hint_rows),
+            status_rows: 1,
+        }
+    }
+
+    /// Reserve one extra footer row for each configured status row above the final one.
+    pub(crate) fn with_status_rows(mut self, rows: u16) -> Self {
+        let rows = rows.max(1);
+        self.cap = self.cap.saturating_add(rows - 1);
+        self.status_rows = rows;
+        self
+    }
+
+    pub(crate) fn status_bounds(&self, width: u16, available: u16) -> Size {
+        inset_footer_hint_area(Rect::new(0, 0, width, self.status_budget(available))).as_size()
+    }
+
+    fn status_budget(&self, available: u16) -> u16 {
+        self.cap.min(available).saturating_sub(self.reserved_hints)
+    }
+
+    pub(crate) fn allocate(&self, available: u16, wanted_status: u16) -> FooterRows {
+        let limit = self.cap.min(available);
+        let reserved_status = wanted_status
+            .min(self.status_rows)
+            .min(self.status_budget(available));
+        let hints = self.wanted_hints.min(limit - reserved_status);
+        FooterRows {
+            status: wanted_status.min(limit - hints),
+            hints,
+        }
+    }
+}
+
+impl FooterRows {
+    pub(crate) fn height(&self) -> u16 {
+        self.status + self.hints
+    }
+
+    pub(crate) fn status_area(&self, area: Rect) -> Rect {
+        inset_footer_hint_area(Rect {
+            y: area.bottom().saturating_sub(self.height()).max(area.y),
+            height: self.status,
+            ..area
+        })
+    }
 }
 
 impl ChatComposer {
@@ -54,21 +123,13 @@ impl ChatComposer {
         let ComposerRows {
             above_input,
             thumbnails: thumbnail_height,
-            status: status_height,
-            hints: footer_hint_height,
+            footer,
             ..
         } = self.composer_rows(area.width, area.height, options);
-        let status = Rect {
-            y: area
-                .bottom()
-                .saturating_sub(footer_hint_height)
-                .saturating_sub(status_height)
-                .max(area.y),
-            height: status_height,
-            ..area
-        };
+        let status = footer.status_area(area);
+        let footer_hint_height = footer.hints;
         let area = Rect {
-            height: area.height - status_height,
+            height: area.height - status.height,
             ..area
         };
         let voice_rows = self
@@ -181,13 +242,13 @@ impl ChatComposer {
         width: u16,
         options: ComposerRenderOptions<'_>,
     ) -> u16 {
-        let rows = self.composer_rows(width, options.max_height.unwrap_or(u16::MAX), options);
+        let height = self.height_budget(width, options);
+        let rows = self.composer_rows(width, height, options);
         [
             rows.input,
             rows.above_input,
             rows.thumbnails,
-            rows.status,
-            rows.hints,
+            rows.footer.height(),
         ]
         .into_iter()
         .fold(0, u16::saturating_add)
@@ -233,7 +294,7 @@ impl ChatComposer {
             || matches!(
                 self.footer_mode(),
                 FooterMode::HistorySearch
-                    | FooterMode::ShortcutOverlay
+                    | FooterMode::ShortcutOverlay(_)
                     | FooterMode::QuitShortcutReminder
                     | FooterMode::EscHint
             );
@@ -241,33 +302,33 @@ impl ChatComposer {
         let mut available = height
             .saturating_sub(input_height)
             .max(u16::from(editing_hint && height > 3));
+        // Use the frame's budget so measurement and painting choose the same cap.
+        let workspace_height = options
+            .separate_status_line
+            .then_some(options.max_height.unwrap_or(u16::MAX));
+        // Configured status rows above the last one need their own budget so help and
+        // transient hints cannot silently replace the final status row.
         let explicit_rows = if self.footer.status_line_enabled && !options.unfocused {
-            self.footer.status_line_rows.len().max(1) as u16
+            u16::try_from(self.footer.status_line_prefix.len())
+                .unwrap_or(u16::MAX)
+                .saturating_add(1)
         } else {
             1
         };
-        let cap = if options.separate_status_line {
-            // Use the frame's budget so measurement and painting choose the same cap.
-            let budget = options.max_height.unwrap_or(u16::MAX);
-            (budget.saturating_add(2) / 4).clamp(2, MAX_FOOTER_ROWS)
-        } else {
-            2
-        };
-        // The upstream cap includes one status row; configured prefix rows need their own
-        // budget so help and transient hints cannot silently replace the final status row.
-        let cap = cap.saturating_add(explicit_rows.saturating_sub(1));
-        let wanted_hints = self.footer_hint_height(width, options);
         // Find needs its query and result before the status line can use a row.
         let find_active = options
             .footer
             .is_some_and(|footer| footer.cursor_column.is_some());
-        let reserved_hints = wanted_hints.min(if find_active { 2 } else { 1 });
-        let wanted_status = self.status_surface_height(
-            width,
-            available.min(cap).saturating_sub(reserved_hints),
-            options,
-        );
-        let basic = (reserved_hints + wanted_status.min(explicit_rows)).min(available);
+        let mut footer = FooterLayout::new(
+            workspace_height,
+            self.footer_hint_height(width, options),
+            /*priority_hint_rows*/ if find_active { 2 } else { 1 },
+        )
+        .with_status_rows(explicit_rows);
+        let wanted_status =
+            self.status_surface_height(footer.status_bounds(width, available), options);
+        let basic = (footer.reserved_hints + wanted_status.min(footer.status_rows))
+            .min(footer.status_rows.saturating_add(1));
         let above_input = above_input.min(available.saturating_sub(basic));
         available -= above_input;
         let mut thumbnails = options.image_previews.map_or(0, |previews| {
@@ -278,17 +339,21 @@ impl ChatComposer {
         } else {
             thumbnails = 0;
         }
-        let limit = cap.min(available);
-        let reserved_status = wanted_status
-            .min(explicit_rows)
-            .min(limit.saturating_sub(reserved_hints));
-        let hints = wanted_hints.min(limit - reserved_status);
+        if self.footer.status_line_enabled
+            && footer.wanted_hints == 0
+            && wanted_status > 0
+            && wanted_status < footer.cap.min(available)
+            && self.attachments.is_empty()
+            && !options.is_dialog_backdrop
+            && self.passive_hints(options).is_some()
+        {
+            footer.wanted_hints = 1;
+        }
         ComposerRows {
             input: input_height,
             above_input,
             thumbnails,
-            status: wanted_status.min(limit - hints),
-            hints,
+            footer: footer.allocate(available, wanted_status),
         }
     }
 }

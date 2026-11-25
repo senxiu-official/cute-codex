@@ -23,6 +23,26 @@ is listed in [CUTE-CODEX-CHANGES.md](CUTE-CODEX-CHANGES.md). It is not an offici
   run on macOS.
 - **License:** Apache-2.0, like upstream ([LICENSE](LICENSE), [NOTICE](NOTICE)).
 
+### Linux sandbox compatibility
+
+Linux releases require a capable system installation of bubblewrap (`bwrap`);
+this release does not bundle the helper. Sandbox startup also requires `pidfd_open`
+(Linux 5.3 or newer) and a host/seccomp policy that permits it. If the required
+helper or host capabilities are unavailable, sandbox startup fails closed.
+
+Transparent TCP proxy mode requires the host to permit the sandbox's user-namespace
+setup. An AppArmor policy that denies this setup prevents the mode from starting;
+the runtime does not silently weaken sandboxing or change host policy. Explicit-proxy
+mode has separate support and does not establish transparent-TCP compatibility.
+
+Linux 需要系统已安装可用的 bubblewrap（`bwrap`）；本版发布包不内置该工具。
+沙盒启动还需要 `pidfd_open`（Linux 5.3 或更新版本），且主机及 seccomp 策略必须允许
+该调用。所需工具或主机能力不可用时，沙盒会拒绝启动。
+
+透明 TCP 代理模式需要主机允许沙盒创建所需的用户命名空间。若 AppArmor
+策略拒绝该操作，此模式将无法启动；运行时不会自动降低沙盒限制或修改主机策略。
+显式代理模式单独提供支持，不代表透明 TCP 模式也能运行。
+
 Built with Codex, Claude, DeepSeek, GLM and Kimi. Product names are trademarks of their owners;
 naming them implies no affiliation or endorsement.
 

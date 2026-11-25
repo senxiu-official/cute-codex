@@ -156,6 +156,25 @@ fn selected_file_launch_is_once_and_never_falls_back_to_other_storage() {
 /// Cutex fork: an env-key provider without its env var takes the selected file's API key.
 #[test]
 fn selected_file_supplies_env_key_provider_api_key() {
+    // Launch selection is immutable and other libtests may already have fixed it.
+    if std::env::var_os("SELECTED_FILE_API_KEY_UNIT_CHILD").is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "auth::selected_file::tests::selected_file_supplies_env_key_provider_api_key",
+            ])
+            .env_clear()
+            .env("HOME", std::env::temp_dir())
+            .env("TMPDIR", std::env::temp_dir())
+            .env("SELECTED_FILE_API_KEY_UNIT_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "isolated selected-file API-key child failed"
+        );
+        return;
+    }
     let root = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()

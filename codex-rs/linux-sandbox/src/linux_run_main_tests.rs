@@ -3,7 +3,7 @@ use super::*;
 #[cfg(test)]
 use crate::linux_run_main::install_bwrap_signal_forwarders;
 #[cfg(test)]
-use crate::linux_run_main::wait_for_bwrap_child;
+use crate::linux_run_main::wait_for_child;
 #[cfg(test)]
 use codex_network_proxy::ManagedNetworkSandboxContext;
 #[cfg(test)]
@@ -25,28 +25,25 @@ fn read_only_file_system_policy() -> FileSystemSandboxPolicy {
     read_only_permission_profile().file_system_sandbox_policy()
 }
 
-#[test]
-fn detects_proc_mount_invalid_argument_failure() {
-    let stderr = "bwrap: Can't mount proc on /newroot/proc: Invalid argument";
-    assert!(is_proc_mount_failure(stderr));
+#[test_case::test_case("/newroot/proc"; "older bubblewrap")]
+#[test_case::test_case("/proc"; "bubblewrap 0.12")]
+fn detects_proc_mount_failures(destination: &str) {
+    for error in [
+        "Invalid argument",
+        "Operation not permitted",
+        "Permission denied",
+    ] {
+        let stderr = format!("bwrap: Can't mount proc on {destination}: {error}\n");
+        assert!(is_proc_mount_failure(&stderr), "{stderr}");
+    }
 }
 
-#[test]
-fn detects_proc_mount_operation_not_permitted_failure() {
-    let stderr = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted";
-    assert!(is_proc_mount_failure(stderr));
-}
-
-#[test]
-fn detects_proc_mount_permission_denied_failure() {
-    let stderr = "bwrap: Can't mount proc on /newroot/proc: Permission denied";
-    assert!(is_proc_mount_failure(stderr));
-}
-
-#[test]
-fn ignores_non_proc_mount_errors() {
-    let stderr = "bwrap: Can't bind mount /dev/null: Operation not permitted";
-    assert!(!is_proc_mount_failure(stderr));
+#[test_case::test_case("bwrap: Can't bind mount /dev/null: Operation not permitted"; "non proc mount")]
+#[test_case::test_case("bwrap: Can't mount proc on /proc-other: Operation not permitted"; "different destination")]
+#[test_case::test_case("bwrap: Can't mount proc on /proc: Limit exceeded (ENOSPC)"; "unhandled mount error")]
+#[test_case::test_case("bwrap: Can't mount proc on /newroot/proc: Limit exceeded (ENOSPC)\nbwrap: Permission denied"; "unrelated error on a different line")]
+fn ignores_unrelated_mount_errors(stderr: &str) {
+    assert!(!is_proc_mount_failure(stderr), "{stderr}");
 }
 
 #[test]
@@ -465,7 +462,7 @@ fn bwrap_signal_forwarder_terminates_child_and_keeps_parent_alive() {
         run_bwrap_signal_forwarder_test_supervisor();
     }
 
-    let status = wait_for_bwrap_child(supervisor_pid);
+    let (_, status) = wait_for_child(supervisor_pid);
     assert!(libc::WIFEXITED(status), "supervisor status: {status}");
     assert_eq!(libc::WEXITSTATUS(status), 0);
 }
@@ -492,7 +489,7 @@ fn run_bwrap_signal_forwarder_test_supervisor() -> ! {
         libc::raise(libc::SIGTERM);
     }
 
-    let status = wait_for_bwrap_child(child_pid);
+    let (_, status) = wait_for_child(child_pid);
     let child_terminated_by_sigterm =
         libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGTERM;
     unsafe {
@@ -506,6 +503,7 @@ fn managed_proxy_inner_command_includes_route_spec() {
     for managed_network in [
         ManagedNetworkSandboxContext::default(),
         ManagedNetworkSandboxContext {
+            transparent_tcp: false,
             loopback_ports: vec![8080, 9090],
             allow_local_binding: true,
             allow_unix_sockets: vec!["/tmp/daemon.sock".to_string()],
@@ -708,4 +706,63 @@ fn valid_inner_stage_modes_do_not_panic() {
     ensure_inner_stage_mode_is_valid(
         /*apply_seccomp_then_exec*/ true, /*use_legacy_landlock*/ false,
     );
+}
+
+#[test]
+fn launcher_pidfd_startup_fails_closed_when_syscall_is_blocked() {
+    const CHILD_ERRNO: &str = "CODEX_TEST_LAUNCHER_PIDFD_ERRNO";
+    if let Ok(errno) = std::env::var(CHILD_ERRNO) {
+        let errno: u32 = errno.parse().unwrap();
+        let mut filter = [
+            libc::sock_filter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
+            libc::sock_filter {
+                code: 0x15,
+                jt: 0,
+                jf: 1,
+                k: libc::SYS_pidfd_open as u32,
+            },
+            libc::sock_filter {
+                code: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x00050000 | errno,
+            },
+            libc::sock_filter {
+                code: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x7fff0000,
+            },
+        ];
+        let program = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_mut_ptr(),
+        };
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
+            0
+        );
+        assert_eq!(unsafe { libc::prctl(libc::PR_SET_SECCOMP, 2, &program) }, 0);
+        drop(super::require_launcher_pidfd());
+        panic!("blocked pidfd_open must refuse startup");
+    }
+    for (errno, cause) in [
+        (libc::ENOSYS, "Linux 5.3 or newer"),
+        (libc::EPERM, "blocked by host policy"),
+    ] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "linux_run_main::tests::launcher_pidfd_startup_fails_closed_when_syscall_is_blocked", "--nocapture"])
+            .env(CHILD_ERRNO, errno.to_string())
+            .output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(cause), "{stderr}");
+        assert!(stderr.contains("No command was started"), "{stderr}");
+        assert!(!stderr.contains("panicked"), "{stderr}");
+    }
 }

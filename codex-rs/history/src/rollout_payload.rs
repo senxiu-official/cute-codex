@@ -18,9 +18,11 @@ use crate::RetainedContextEvent;
 use crate::RetainedUserMessage;
 use codex_protocol::ContextWindowId;
 use codex_protocol::ResponseItemId;
+use codex_protocol::ResponseItemIdAllocation;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -46,12 +48,12 @@ pub(super) enum RolloutItemWire<'a> {
         payload: DynamicToolsUpdatedPayload<'a>,
     },
     ResponseItem {
-        payload: Cow<'a, ResponseItem>,
+        payload: ItemPayload<'a, ResponseItem>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metadata: Option<Cow<'a, CodexHarnessMetadata>>,
     },
     InterAgentCommunication {
-        payload: Cow<'a, InterAgentCommunication>,
+        payload: ItemPayload<'a, InterAgentCommunication>,
     },
     InterAgentCommunicationMetadata {
         payload: InterAgentCommunicationMetadataPayload,
@@ -104,29 +106,50 @@ where
         .permission_profile
         .to_legacy_sandbox_policy(cwd)
         .unwrap_or_else(|_| {
-            let tmpdir_writable = std::env::var_os("TMPDIR")
+            // Rollout serialization must not probe executor-owned paths. In
+            // particular, a UNC root can block the writer and every flush.
+            let cwd_uri = context.cwd.clone().into();
+            let temporary_directories = std::env::var_os("TMPDIR")
                 .filter(|path| !path.is_empty())
                 .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
-                .is_some_and(|path| file_system.can_write_local_path_with_cwd(path.as_path(), cwd));
-            let slash_tmp = std::path::Path::new("/tmp");
-            let slash_tmp_writable = slash_tmp.is_absolute()
-                && slash_tmp.is_dir()
-                && file_system.can_write_local_path_with_cwd(slash_tmp, cwd);
+                .map(Into::into)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let paths = FileSystemSandboxPolicyContext {
+                cwd: &cwd_uri,
+                workspace_roots: std::slice::from_ref(&cwd_uri),
+                user_home_dir: None,
+                temporary_directories: Some(&temporary_directories),
+            };
+            let tmpdir_writable = temporary_directories
+                .iter()
+                .any(|path| file_system.can_write_path(path, &paths));
+            let slash_tmp_writable = AbsolutePathBuf::from_absolute_path("/tmp")
+                .ok()
+                .is_some_and(|path| file_system.can_write_path(&path.into(), &paths));
+            let mut writable_roots = file_system
+                .resolved_entries(&paths)
+                .into_iter()
+                .filter(|(path, access)| {
+                    access.can_write() && file_system.can_write_path(path, &paths)
+                })
+                .filter_map(|(path, _)| path.to_abs_path().ok())
+                .filter(|root| root != &context.cwd)
+                .collect::<Vec<_>>();
+            writable_roots.sort();
+            writable_roots.dedup();
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: file_system
-                    .get_writable_roots_with_cwd(cwd)
-                    .into_iter()
-                    .map(|root| root.root)
-                    .filter(|root| root != &context.cwd)
-                    .collect(),
+                writable_roots,
                 network_access: network.is_enabled(),
                 exclude_tmpdir_env_var: !tmpdir_writable,
                 exclude_slash_tmp: !slash_tmp_writable,
             }
         });
-    let legacy_file_system =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, cwd);
-    let file_system_sandbox_policy = (file_system != legacy_file_system)
+    // Rebuilding workspace metadata protections probes every writable root.
+    // Preserve the explicit policy instead of resolving those paths while writing.
+    let preserve_file_system = matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. })
+        || file_system != FileSystemSandboxPolicy::from(&sandbox_policy);
+    let file_system_sandbox_policy = preserve_file_system
         .then(|| file_system.try_into().ok())
         .flatten();
     Wire {
@@ -141,6 +164,42 @@ where
 pub(super) struct DynamicToolsUpdatedPayload<'a> {
     thread_id: codex_protocol::ThreadId,
     tools: Cow<'a, [codex_protocol::dynamic_tools::DynamicToolSpec]>,
+}
+
+/// The protocol item keeps its wire ID. The optional allocation lets replay resume the sequence.
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub(super) struct ItemPayload<'a, T: Clone> {
+    #[serde(flatten)]
+    item: Cow<'a, T>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id_allocation: Option<Cow<'a, ResponseItemIdAllocation>>,
+}
+
+impl<'a, T: Clone> ItemPayload<'a, T> {
+    fn borrowed(item: &'a T, id: Option<&'a ResponseItemId>) -> Self {
+        Self {
+            item: Cow::Borrowed(item),
+            id_allocation: id.and_then(ResponseItemId::allocation).map(Cow::Borrowed),
+        }
+    }
+}
+
+impl<'a> From<&'a ResponseItem> for ItemPayload<'a, ResponseItem> {
+    fn from(item: &'a ResponseItem) -> Self {
+        Self::borrowed(item, item.id())
+    }
+}
+
+impl From<ItemPayload<'_, ResponseItem>> for ResponseItem {
+    fn from(payload: ItemPayload<'_, ResponseItem>) -> Self {
+        let mut item = payload.item.into_owned();
+        if let Some(allocation) = payload.id_allocation
+            && let Some(id) = item.id().cloned()
+        {
+            item.set_id(Some(id.with_allocation(allocation.into_owned())));
+        }
+        item
+    }
 }
 
 impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
@@ -159,11 +218,11 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
                 },
             },
             RolloutItem::ResponseItem(envelope) => Self::ResponseItem {
-                payload: Cow::Borrowed(&envelope.item),
+                payload: (&envelope.item).into(),
                 metadata: envelope.metadata.as_ref().map(Cow::Borrowed),
             },
             RolloutItem::InterAgentCommunication(payload) => Self::InterAgentCommunication {
-                payload: Cow::Borrowed(payload),
+                payload: ItemPayload::borrowed(payload, payload.id.as_ref()),
             },
             RolloutItem::InterAgentCommunicationMetadata { trigger_turn } => {
                 Self::InterAgentCommunicationMetadata {
@@ -187,6 +246,7 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
             RolloutItem::RetainedContext(RetainedContextEvent::DeliveredAssistantMessage {
                 message,
                 acceptance_order,
+                retained_source,
             }) => {
                 // Earlier clients preserve this as genuine assistant context, including across compaction.
                 let text = if message.complete {
@@ -200,28 +260,32 @@ impl<'a> From<&'a RolloutItem> for RolloutItemWire<'a> {
                     format!("{CODE_MODE_DELIVERY_INCOMPLETE}{}", message.text)
                 };
                 Self::ResponseItem {
-                    payload: Cow::Owned(ResponseItem::Message {
-                        status: None,
-                        encrypted_content: None,
-                        id: message.message_id.clone().map(ResponseItemId::from_server),
-                        role: "assistant".to_owned(),
-                        content: vec![ContentItem::OutputText {
-                            annotations: None,
-                            logprobs: None,
-                            text,
-                        }],
-                        // Older Guardian clients exclude commentary from root-to-worker
-                        // review. Keep the phase unspecified so they can review this
-                        // confirmed delivery without claiming it ended the turn.
-                        phase: None,
-                        internal_chat_message_metadata_passthrough: Some(
-                            InternalChatMessageMetadataPassthrough {
-                                turn_id: Some(message.turn_id.clone()),
-                                ..Default::default()
-                            },
-                        ),
-                    }),
+                    payload: ItemPayload {
+                        item: Cow::Owned(ResponseItem::Message {
+                            status: None,
+                            encrypted_content: None,
+                            id: message.message_id.clone().map(ResponseItemId::from_server),
+                            role: "assistant".to_owned(),
+                            content: vec![ContentItem::OutputText {
+                                annotations: None,
+                                logprobs: None,
+                                text,
+                            }],
+                            // Older Guardian clients exclude commentary from root-to-worker
+                            // review. Keep the phase unspecified so they can review this
+                            // confirmed delivery without claiming it ended the turn.
+                            phase: None,
+                            internal_chat_message_metadata_passthrough: Some(
+                                InternalChatMessageMetadataPassthrough {
+                                    turn_id: Some(message.turn_id.clone()),
+                                    ..Default::default()
+                                },
+                            ),
+                        }),
+                        id_allocation: None,
+                    },
                     metadata: Some(Cow::Owned(CodexHarnessMetadata {
+                        retained_source: retained_source.clone(),
                         delivered_assistant_message: Some(marker),
                         user_input_order: Some(*acceptance_order),
                         ..Default::default()
@@ -265,7 +329,7 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
                         ..
                     },
                     Some(metadata),
-                ) = (payload.as_ref(), metadata.as_deref())
+                ) = (payload.item.as_ref(), metadata.as_deref())
                     && role == "assistant"
                     && let [ContentItem::OutputText { text, .. }] = content.as_slice()
                     && let Some(turn_id) = passthrough.turn_id.as_ref()
@@ -290,16 +354,23 @@ impl From<RolloutItemWire<'_>> for RolloutItem {
                                 phase: None,
                             },
                             acceptance_order,
+                            retained_source: metadata.retained_source.clone(),
                         },
                     );
                 }
                 Self::ResponseItem(ResponseItemEnvelope {
-                    item: payload.into_owned(),
+                    item: payload.into(),
                     metadata: metadata.map(Cow::into_owned),
                 })
             }
             RolloutItemWire::InterAgentCommunication { payload } => {
-                Self::InterAgentCommunication(payload.into_owned())
+                let mut message = payload.item.into_owned();
+                if let Some(allocation) = payload.id_allocation
+                    && let Some(id) = message.id.take()
+                {
+                    message.id = Some(id.with_allocation(allocation.into_owned()));
+                }
+                Self::InterAgentCommunication(message)
             }
             RolloutItemWire::InterAgentCommunicationMetadata { payload } => {
                 Self::InterAgentCommunicationMetadata {
@@ -333,7 +404,7 @@ pub(super) struct InterAgentCommunicationMetadataPayload {
 pub(super) struct CompactedItemWire<'a> {
     message: Cow<'a, str>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    replacement_history: Option<Vec<Cow<'a, ResponseItem>>>,
+    replacement_history: Option<Vec<ItemPayload<'a, ResponseItem>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     replacement_history_metadata: Option<Vec<Cow<'a, CodexHarnessMetadata>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,7 +451,7 @@ impl<'a> From<&'a CompactedItem> for CompactedItemWire<'a> {
             replacement_history: item.replacement_history.as_ref().map(|items| {
                 items
                     .iter()
-                    .map(|envelope| Cow::Borrowed(&envelope.item))
+                    .map(|envelope| (&envelope.item).into())
                     .collect()
             }),
             replacement_history_metadata,
@@ -422,7 +493,7 @@ impl TryFrom<CompactedItemWire<'_>> for CompactedItem {
                         .into_iter()
                         .zip(metadata)
                         .map(|(item, metadata)| ResponseItemEnvelope {
-                            item: item.into_owned(),
+                            item: item.into(),
                             metadata: Some(metadata.into_owned()),
                         })
                         .collect(),
@@ -431,7 +502,7 @@ impl TryFrom<CompactedItemWire<'_>> for CompactedItem {
             (Some(items), None) => Some(
                 items
                     .into_iter()
-                    .map(|item| ResponseItemEnvelope::new(item.into_owned()))
+                    .map(|item| ResponseItemEnvelope::new(item.into()))
                     .collect(),
             ),
             (None, Some(_)) => {

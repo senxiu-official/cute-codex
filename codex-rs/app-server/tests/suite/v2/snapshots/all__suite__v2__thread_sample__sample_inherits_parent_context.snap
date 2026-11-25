@@ -1,5 +1,6 @@
 ---
 source: app-server/tests/suite/v2/thread_sample.rs
+assertion_line: 365
 expression: "context_snapshot::format_request_history_snapshot(\"A parent uses high effort with custom instructions, client tools, permission tools, and priority service. A medium-effort sample, prediction fork, and subsequent parent turn preserve the same request context and high request-effort baseline.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: A parent uses high effort with custom instructions, client tools, permission tools, and priority service. A medium-effort sample, prediction fork, and subsequent parent turn preserve the same request context and high request-effort baseline.
@@ -16,8 +17,8 @@ Settings:
   stream: true
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=a44bafcb6a958843):
-        - namespace/functions; hash=8f13e932a6bf03bd
+00:additional_tools/developer (3; hash=d5e239176304172a):
+        - namespace/functions; hash=7a14572bef41d986
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -76,8 +77,8 @@ Settings:
 ## Window 2 (after request 2: input repeated)
 Settings: same as window 1
 -- request 3 (turn) --
-00:additional_tools/developer (3; hash=a44bafcb6a958843):
-        - namespace/functions; hash=8f13e932a6bf03bd
+00:additional_tools/developer (3; hash=d5e239176304172a):
+        - namespace/functions; hash=7a14572bef41d986
           - function/exec_command
           - function/write_stdin
           - function/request_user_input
@@ -135,8 +136,8 @@ Settings: same as window 1
 ## Window 3 (after request 3: input repeated)
 Settings: same as window 1
 -- request 4 (turn) --
-00:additional_tools/developer (3; hash=a44bafcb6a958843):
-        - namespace/functions; hash=8f13e932a6bf03bd
+00:additional_tools/developer (3; hash=d5e239176304172a):
+        - namespace/functions; hash=7a14572bef41d986
           - function/exec_command
           - function/write_stdin
           - function/request_user_input

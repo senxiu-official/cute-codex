@@ -256,6 +256,7 @@ async fn durable_notice_active_mcp_group_keeps_both_facts() {
         let _ = drain_insert_history(&mut rx);
         let mut item = AppServerThreadItemPayload::McpToolCall {
             mcp_app_ui: None,
+            environment_id: None,
             id: "call".into(),
             server: "cutex_job".into(),
             tool: "query".into(),
